@@ -1,0 +1,19 @@
+appId: com.nexus.kiosk
+productName: Nexus Kiosk
+directories:
+  output: release
+  buildResources: assets
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+asar: true
+asarUnpack:
+  - node_modules/electron-store/**
+win:
+  target: nsis
+  icon: assets/icon.png
+nsis:
+  oneClick: true
+  perMachine: true
+  allowToChangeInstallationDirectory: false

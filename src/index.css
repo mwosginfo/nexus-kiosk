@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Kiosk mode: prevent text selection and context menu */
+.kiosk-mode {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+/* Large touch targets for kiosk */
+.touch-target {
+  @apply min-h-[48px] min-w-[48px];
+}
+
+/* Queue number display */
+.queue-number-xl {
+  @apply text-7xl font-bold font-mono tracking-widest;
+}
