@@ -10,8 +10,9 @@ import { generateRefCode, todaySGT, OWWA_SERVICE_ID } from '../lib/constants';
  */
 const APPOINTMENT_FIELDS = `
   id, ref_code, service_id, appointment_date, start_time, end_time,
-  status, client_fname, client_lname, client_mname,
-  client_email, client_data, ticket_number,
+  status, ofw_lname, ofw_fname, ofw_mname,
+  client_email, client_contact, client_data,
+  appt_status, p_name, ofw_visa, ofw_position, ofw_trans, ofw_gender,
   confirmed_at, staff_notes, created_at, updated_at
 `;
 
@@ -149,9 +150,9 @@ export async function createWalkInAppointment(data: {
       start_time: startTime,
       end_time: endTime,
       status: 'confirmed',
-      client_fname: data.fname.trim(),
-      client_lname: data.lname.trim(),
-      client_mname: '',
+      ofw_fname: data.fname.trim(),
+      ofw_lname: data.lname.trim(),
+      ofw_mname: '',
       client_email: data.email.trim().toLowerCase(),
       client_data: { mobile_no: data.phone.trim() },
       confirmed_at: now.toISOString(),

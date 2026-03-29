@@ -39,8 +39,11 @@ function buildReceiptHtml(data: TicketData): string {
   .header {
     font-size: 11pt;
     font-weight: bold;
-    margin-bottom: 3mm;
     line-height: 1.3;
+  }
+  .datetime {
+    font-size: 9pt;
+    margin: 2mm 0 3mm;
   }
   .divider {
     border-top: 1px dashed #000;
@@ -57,39 +60,43 @@ function buildReceiptHtml(data: TicketData): string {
     font-weight: bold;
     margin: 2mm 0;
   }
-  .client {
-    font-size: 10pt;
-    margin: 2mm 0;
-  }
-  .datetime {
-    font-size: 9pt;
-    color: #333;
-    margin: 2mm 0;
-  }
   .footer {
-    font-size: 8pt;
-    color: #666;
+    font-size: 9pt;
     margin-top: 4mm;
   }
 </style>
 </head>
 <body>
-  <div class="header">Migrant Workers Office<br>Singapore</div>
+  <div class="header">Migrant Workers Office - Singapore</div>
+  <div class="datetime">${dateStr} ${timeStr}</div>
   <div class="divider"></div>
   <div class="queue-number">${data.queueNumber}</div>
   <div class="service">${data.serviceType.replace(/_/g, ' ')}</div>
-  <div class="client">${data.clientName}</div>
   <div class="divider"></div>
-  <div class="datetime">${dateStr} ${timeStr}</div>
-  <div class="footer">Please wait for your number to be called.</div>
+  <div class="footer">Please proceed to the consular area.</div>
 </body>
 </html>`;
 }
 
 export function registerPrintHandlers(): void {
   ipcMain.handle('print-ticket', async (_event, data: TicketData) => {
-    const printerName = settingsStore.get('printerName') ?? '';
+    const printerName = (settingsStore.get('printerName') ?? '').trim();
     const html = buildReceiptHtml(data);
+
+    // Validate printer exists before attempting to print
+    const mainWindow = BrowserWindow.getAllWindows()[0];
+    if (mainWindow && printerName) {
+      const printers = mainWindow.webContents.getPrintersAsync
+        ? await mainWindow.webContents.getPrintersAsync()
+        : [];
+      const match = printers.find((p) => p.name === printerName);
+      if (!match) {
+        const available = printers.map((p) => p.name).join(', ');
+        throw new Error(
+          `Printer "${printerName}" not found. Available: ${available || '(none)'}`
+        );
+      }
+    }
 
     // Create a hidden window to render and print the receipt
     const printWindow = new BrowserWindow({
@@ -106,6 +113,13 @@ export function registerPrintHandlers(): void {
       `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
     );
 
+    // Wait for content to finish rendering before printing
+    await new Promise<void>((resolve) => {
+      printWindow.webContents.once('did-finish-load', () => resolve());
+      // If already loaded (data URL), resolve immediately
+      if (!printWindow.webContents.isLoading()) resolve();
+    });
+
     return new Promise<void>((resolve, reject) => {
       printWindow.webContents.print(
         {
@@ -118,7 +132,11 @@ export function registerPrintHandlers(): void {
           if (success) {
             resolve();
           } else {
-            reject(new Error(failureReason ?? 'Print failed'));
+            reject(
+              new Error(
+                failureReason ?? 'Print job canceled — check printer is online and paper is loaded'
+              )
+            );
           }
         }
       );

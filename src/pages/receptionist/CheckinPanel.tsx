@@ -1,11 +1,20 @@
 import { useState } from 'react';
 import { QueueNumberDisplay } from '../../components/QueueNumberDisplay';
-import { SERVICE_LABELS } from '../../lib/constants';
+import { SERVICE_LABELS, SERVICE_ID_MAP } from '../../lib/constants';
 import * as appointmentService from '../../services/appointment.service';
 import * as fraService from '../../services/fra.service';
 import * as checkinBridge from '../../services/checkin-bridge.service';
+import * as nexusApi from '../../services/nexus-api.client';
 import type { AppointmentWithService } from '../../schemas/appointment.schema';
 import type { FraRegistrationRow } from '../../schemas/fra.schema';
+
+/** Resolve service label from service_id */
+function resolveServiceLabel(serviceId: string): string {
+  for (const [key, id] of Object.entries(SERVICE_ID_MAP)) {
+    if (id === serviceId) return SERVICE_LABELS[key] ?? key.replace(/_/g, ' ');
+  }
+  return 'Contract Verification';
+}
 
 type SelectedItem =
   | { readonly type: 'appointment'; readonly data: AppointmentWithService }
@@ -33,38 +42,63 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: Check
         // 1. Mark arrived on Supabase
         await appointmentService.markArrived(appt.id);
 
-        // 2. Request queue number via bridge (Nexus picks up from kiosk_checkins)
-        const result = await checkinBridge.requestCheckin(appt.ref_code, 'APPOINTMENT');
+        // 2. Get queue number — try direct API first, fall back to bridge
+        let displayNumber: string;
+        if (nexusApi.isAuthenticated()) {
+          try {
+            const apiResult = await nexusApi.checkin(appt.ref_code);
+            displayNumber = String(apiResult.entry.queueNumber);
+          } catch {
+            const bridgeResult = await checkinBridge.requestCheckin(appt.ref_code, 'APPOINTMENT');
+            displayNumber = bridgeResult.displayNumber;
+          }
+        } else {
+          const bridgeResult = await checkinBridge.requestCheckin(appt.ref_code, 'APPOINTMENT');
+          displayNumber = bridgeResult.displayNumber;
+        }
 
-        // 3. Print ticket
-        const name = [appt.client_fname, appt.client_mname, appt.client_lname]
+        const name = [appt.ofw_fname, appt.ofw_mname, appt.ofw_lname]
           .filter(Boolean)
           .join(' ');
+        const serviceLabel = resolveServiceLabel(appt.service_id);
 
-        await window.electronAPI.printTicket({
-          queueNumber: result.displayNumber,
+        onCheckinComplete(displayNumber, name);
+
+        // Print in background — don't block UI
+        window.electronAPI.printTicket({
+          queueNumber: displayNumber,
           clientName: name,
-          serviceType: result.serviceType,
-        });
-
-        onCheckinComplete(result.displayNumber, name);
+          serviceType: serviceLabel,
+        }).catch((err: unknown) => console.error('[CheckinPanel] Print error:', err));
       } else {
         const fra = selected.data;
 
         // 1. Mark arrived on Supabase
         await fraService.markArrived(fra.id);
 
-        // 2. Request queue number via bridge
-        const result = await checkinBridge.requestCheckin(fra.transaction_ref, 'FRA');
+        // 2. Get queue number — try direct API first, fall back to bridge
+        let displayNumber: string;
+        if (nexusApi.isAuthenticated()) {
+          try {
+            const apiResult = await nexusApi.fraCheckin(fra.transaction_ref);
+            displayNumber = apiResult.displayNumber;
+          } catch {
+            const bridgeResult = await checkinBridge.requestCheckin(fra.transaction_ref, 'FRA');
+            displayNumber = bridgeResult.displayNumber;
+          }
+        } else {
+          const bridgeResult = await checkinBridge.requestCheckin(fra.transaction_ref, 'FRA');
+          displayNumber = bridgeResult.displayNumber;
+        }
 
-        // 3. Print ticket
-        await window.electronAPI.printTicket({
-          queueNumber: result.displayNumber,
+        onCheckinComplete(displayNumber, fra.fra);
+
+        // Print in background — don't block UI
+        window.electronAPI.printTicket({
+          queueNumber: displayNumber,
           clientName: fra.fra,
-          serviceType: 'FRA REGISTRATION',
-        });
-
-        onCheckinComplete(result.displayNumber, fra.fra);
+          serviceType: 'FRA Registration',
+        }).catch((err: unknown) => console.error('[CheckinPanel] Print error:', err));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Check-in failed');
@@ -113,7 +147,7 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: Check
   // Selected appointment detail
   if (selected.type === 'appointment') {
     const a = selected.data;
-    const name = [a.client_fname, a.client_mname, a.client_lname].filter(Boolean).join(' ');
+    const name = [a.ofw_fname, a.ofw_mname, a.ofw_lname].filter(Boolean).join(' ');
     const serviceLabel = a.services?.name ?? SERVICE_LABELS[a.service_id] ?? a.service_id;
     const isAlreadyArrived = a.appt_status === 'ARRIVED';
 

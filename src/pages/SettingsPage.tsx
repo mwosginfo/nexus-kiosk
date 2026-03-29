@@ -124,8 +124,9 @@ export function SettingsPage() {
       const { data, error } = await svc
         .from('appointments')
         .select(`id, ref_code, service_id, appointment_date, start_time, end_time,
-          status, client_fname, client_lname, client_mname,
-          client_email, client_data, ticket_number,
+          status, ofw_lname, ofw_fname, ofw_mname,
+          client_email, client_contact, client_data, appt_status,
+          p_name, ofw_visa, ofw_position, ofw_trans, ofw_gender,
           confirmed_at, staff_notes, created_at, updated_at`)
         .eq('ref_code', 'CHDDY44V')
         .limit(1)
@@ -136,7 +137,7 @@ export function SettingsPage() {
         lines.push(`[REF LOOKUP full] No row found`);
       } else {
         const d = data as Record<string,unknown>;
-        lines.push(`[REF LOOKUP full] FOUND: status=${d.status}, date=${d.appointment_date}, name=${d.client_fname} ${d.client_lname}`);
+        lines.push(`[REF LOOKUP full] FOUND: status=${d.status}, date=${d.appointment_date}, name=${d.ofw_fname} ${d.ofw_lname}`);
       }
     } catch (e) {
       lines.push(`[REF LOOKUP full] EXCEPTION: ${e instanceof Error ? e.message : String(e)}`);

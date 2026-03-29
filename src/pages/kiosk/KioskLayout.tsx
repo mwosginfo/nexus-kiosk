@@ -7,10 +7,33 @@ import { SuccessScreen } from './SuccessScreen';
 import { ErrorScreen } from './ErrorScreen';
 import { useIdleTimer } from '../../hooks/useIdleTimer';
 import { useScanner } from '../../hooks/useScanner';
-import { UUID_REGEX } from '../../lib/constants';
+import { UUID_REGEX, SERVICE_LABELS } from '../../lib/constants';
 import * as appointmentService from '../../services/appointment.service';
 import * as fraService from '../../services/fra.service';
 import * as checkinBridge from '../../services/checkin-bridge.service';
+import * as nexusApi from '../../services/nexus-api.client';
+
+/** Resolve a human-readable service label from service_id or bridge serviceType */
+function resolveServiceLabel(serviceId: string, bridgeServiceType?: string): string {
+  // Try matching service_id against known labels
+  for (const [key, id] of Object.entries(
+    // Import would be circular — inline the ID map
+    {
+      SKILLED_CV: '30c55940-083c-434a-8212-e810f2fa37b2',
+      MDW_CV: 'cc50f069-1dc6-48ac-9e04-dbaf2a28b839',
+      OWWA: '23470e2d-397e-4a24-b3ee-f55ed3fec65c',
+      DH: 'ff4eeaf1-0009-4664-b9d8-6ea48de0f745',
+      FRA_REGISTRATION: '7b9257b9-b2b6-404c-b277-c585ef27ec34',
+    } as Record<string, string>,
+  )) {
+    if (id === serviceId) return SERVICE_LABELS[key] ?? key.replace(/_/g, ' ');
+  }
+  // Fallback to bridge value if it's not a UUID
+  if (bridgeServiceType && !/^[0-9a-f-]{36}$/i.test(bridgeServiceType)) {
+    return bridgeServiceType.replace(/_/g, ' ');
+  }
+  return 'Contract Verification';
+}
 
 type KioskScreen =
   | 'SPLASH'
@@ -44,7 +67,7 @@ export function KioskLayout() {
     screen !== 'SPLASH'
   );
 
-  // Perform the full checkin flow
+  // Perform the full checkin flow — tries direct Nexus API first, falls back to Supabase bridge
   const doCheckin = useCallback(async (value: string, type: AppointmentType) => {
     setLoading(true);
     try {
@@ -60,23 +83,38 @@ export function KioskLayout() {
           await fraService.markArrived(fra.id);
         }
 
-        // Request queue number via bridge (Nexus picks up from kiosk_checkins)
-        const bridgeResult = await checkinBridge.requestCheckin(fra.transaction_ref, 'FRA');
+        let displayNumber: string;
+
+        // Try direct API first (LAN), fall back to bridge (external)
+        if (nexusApi.isAuthenticated()) {
+          try {
+            const apiResult = await nexusApi.fraCheckin(fra.transaction_ref);
+            displayNumber = apiResult.displayNumber;
+          } catch (apiErr) {
+            console.warn('[KioskLayout] Direct API failed, trying bridge:', apiErr);
+            const bridgeResult = await checkinBridge.requestCheckin(fra.transaction_ref, 'FRA');
+            displayNumber = bridgeResult.displayNumber;
+          }
+        } else {
+          const bridgeResult = await checkinBridge.requestCheckin(fra.transaction_ref, 'FRA');
+          displayNumber = bridgeResult.displayNumber;
+        }
 
         const checkinResult: CheckinResult = {
-          queueNumber: bridgeResult.displayNumber,
+          queueNumber: displayNumber,
           name: fra.fra,
-          serviceType: 'FRA REGISTRATION',
+          serviceType: 'FRA Registration',
         };
-
-        await window.electronAPI.printTicket({
-          queueNumber: checkinResult.queueNumber,
-          clientName: checkinResult.name,
-          serviceType: checkinResult.serviceType,
-        });
 
         setResult(checkinResult);
         setScreen('SUCCESS');
+
+        // Print in background — don't block success screen
+        window.electronAPI.printTicket({
+          queueNumber: checkinResult.queueNumber,
+          clientName: checkinResult.name,
+          serviceType: checkinResult.serviceType,
+        }).catch((err: unknown) => console.error('[KioskLayout] Print error:', err));
       } else {
         // Regular appointment flow
         const appt = await appointmentService.lookupByRefCode(value);
@@ -89,27 +127,43 @@ export function KioskLayout() {
           await appointmentService.markArrived(appt.id);
         }
 
-        // Request queue number via bridge
-        const bridgeResult = await checkinBridge.requestCheckin(appt.ref_code, 'APPOINTMENT');
-
-        const name = [appt.client_fname, appt.client_mname, appt.client_lname]
+        const name = [appt.ofw_fname, appt.ofw_mname, appt.ofw_lname]
           .filter(Boolean)
           .join(' ');
+        const serviceLabel = resolveServiceLabel(appt.service_id);
+
+        let displayNumber: string;
+
+        // Try direct API first (LAN), fall back to bridge (external)
+        if (nexusApi.isAuthenticated()) {
+          try {
+            const apiResult = await nexusApi.checkin(appt.ref_code);
+            displayNumber = String(apiResult.entry.queueNumber);
+          } catch (apiErr) {
+            console.warn('[KioskLayout] Direct API failed, trying bridge:', apiErr);
+            const bridgeResult = await checkinBridge.requestCheckin(appt.ref_code, 'APPOINTMENT');
+            displayNumber = bridgeResult.displayNumber;
+          }
+        } else {
+          const bridgeResult = await checkinBridge.requestCheckin(appt.ref_code, 'APPOINTMENT');
+          displayNumber = bridgeResult.displayNumber;
+        }
 
         const checkinResult: CheckinResult = {
-          queueNumber: bridgeResult.displayNumber,
+          queueNumber: displayNumber,
           name,
-          serviceType: bridgeResult.serviceType.replace(/_/g, ' '),
+          serviceType: serviceLabel,
         };
-
-        await window.electronAPI.printTicket({
-          queueNumber: checkinResult.queueNumber,
-          clientName: checkinResult.name,
-          serviceType: checkinResult.serviceType,
-        });
 
         setResult(checkinResult);
         setScreen('SUCCESS');
+
+        // Print in background — don't block success screen
+        window.electronAPI.printTicket({
+          queueNumber: checkinResult.queueNumber,
+          clientName: checkinResult.name,
+          serviceType: checkinResult.serviceType,
+        }).catch((err: unknown) => console.error('[KioskLayout] Print error:', err));
       }
     } catch (err) {
       console.error('[KioskLayout] Checkin error:', err);

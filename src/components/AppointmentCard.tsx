@@ -9,7 +9,7 @@ interface AppointmentCardProps {
 
 export function AppointmentCard({ appointment, selected, onClick }: AppointmentCardProps) {
   const a = appointment;
-  const name = [a.client_fname, a.client_mname, a.client_lname].filter(Boolean).join(' ');
+  const name = [a.ofw_fname, a.ofw_mname, a.ofw_lname].filter(Boolean).join(' ');
   const serviceLabel = a.services?.name ?? SERVICE_LABELS[a.service_id] ?? 'Unknown Service';
 
   const statusColors: Record<string, string> = {
