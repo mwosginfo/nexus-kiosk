@@ -6,9 +6,6 @@ interface StoreSchema {
   supabaseUrl: string;
   supabaseAnonKey: string;
   supabaseServiceKey: string;
-  nexusApiUrl: string;
-  nexusUsername: string;
-  nexusPassword: string;
   printerName: string;
   paperWidth: '58mm' | '80mm';
 }
@@ -21,9 +18,6 @@ export const settingsStore = new Store<StoreSchema>({
     supabaseUrl: '',
     supabaseAnonKey: '',
     supabaseServiceKey: '',
-    nexusApiUrl: '',
-    nexusUsername: '',
-    nexusPassword: '',
     printerName: '',
     paperWidth: '80mm',
   },

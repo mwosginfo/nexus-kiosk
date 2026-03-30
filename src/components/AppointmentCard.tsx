@@ -1,5 +1,5 @@
 import type { AppointmentWithService } from '../schemas/appointment.schema';
-import { SERVICE_LABELS } from '../lib/constants';
+import { resolveServiceLabel } from '../lib/constants';
 
 interface AppointmentCardProps {
   readonly appointment: AppointmentWithService;
@@ -10,7 +10,7 @@ interface AppointmentCardProps {
 export function AppointmentCard({ appointment, selected, onClick }: AppointmentCardProps) {
   const a = appointment;
   const name = [a.ofw_fname, a.ofw_mname, a.ofw_lname].filter(Boolean).join(' ');
-  const serviceLabel = a.services?.name ?? SERVICE_LABELS[a.service_id] ?? 'Unknown Service';
+  const serviceLabel = a.services?.name ?? resolveServiceLabel(a.service_id);
 
   const statusColors: Record<string, string> = {
     pending: 'bg-amber-100 text-amber-700',

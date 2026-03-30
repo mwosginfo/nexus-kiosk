@@ -14,30 +14,85 @@ export const SERVICE_LABELS: Readonly<Record<string, string>> = {
   ACCREDITATION: 'Accreditation',
 } as const;
 
-/** Service type → Supabase service_id mapping for walk-in creation */
+/** Service type → Supabase service_id mapping */
 export const SERVICE_ID_MAP: Readonly<Record<string, string>> = {
   SKILLED_CV: '30c55940-083c-434a-8212-e810f2fa37b2',
   MDW_CV: 'cc50f069-1dc6-48ac-9e04-dbaf2a28b839',
-  OWWA: OWWA_SERVICE_ID,                                   // 23470e2d-397e-4a24-b3ee-f55ed3fec65c
+  OWWA: OWWA_SERVICE_ID,
   DH: 'ff4eeaf1-0009-4664-b9d8-6ea48de0f745',
-  FRA_REGISTRATION: FRA_SERVICE_ID,                        // 7b9257b9-b2b6-404c-b277-c585ef27ec34
+  FRA_REGISTRATION: FRA_SERVICE_ID,
 } as const;
 
-/** Look up service ID with runtime guard — throws if not configured */
-export function getServiceId(serviceType: string): string {
-  const id = SERVICE_ID_MAP[serviceType];
-  if (!id) throw new Error(`No service_id configured for type: ${serviceType}`);
-  return id;
+/** Service slug (from services table) → queue series + service type */
+export const SLUG_MAP: Readonly<Record<string, { series: string; serviceType: string }>> = {
+  'skilled-cv':       { series: 'REGULAR',  serviceType: 'SKILLED_CV' },
+  'mdw-cv':           { series: 'REGULAR',  serviceType: 'MDW_CV' },
+  'dh':               { series: 'REGULAR',  serviceType: 'DH' },
+  'owwa':             { series: 'OWWA',     serviceType: 'OWWA' },
+  'fra-registration': { series: 'FRA',      serviceType: 'FRA_REGISTRATION' },
+  'accreditation':    { series: 'REGULAR',  serviceType: 'ACCREDITATION' },
+} as const;
+
+/** Resolve queue series from service_id (fallback when slug lookup fails) */
+export function resolveQueueSeries(serviceId: string): { series: string; serviceType: string } {
+  if (serviceId === FRA_SERVICE_ID) return { series: 'FRA', serviceType: 'FRA_REGISTRATION' };
+  if (serviceId === OWWA_SERVICE_ID) return { series: 'OWWA', serviceType: 'OWWA' };
+  for (const [key, id] of Object.entries(SERVICE_ID_MAP)) {
+    if (id === serviceId) return { series: 'REGULAR', serviceType: key };
+  }
+  return { series: 'REGULAR', serviceType: 'SKILLED_CV' };
 }
 
-/** Service type → slug mapping for walk-in appointment creation */
-export const SERVICE_SLUG_MAP: Readonly<Record<string, string>> = {
-  MDW_CV: 'mdw-cv',
-  SKILLED_CV: 'skilled-cv',
-  OWWA: 'owwa',
-  DH: 'dh',
-  ACCREDITATION: 'accreditation',
-} as const;
+/**
+ * Queue series start numbers.
+ * - REGULAR: 6001, 6002...
+ * - OWWA: 9001, 9002... (same series for appointments + walk-ins)
+ * - FRA: 1, 2, 3... (displayed as A001, A002...)
+ * - WALKIN_REGULAR: 601, 602... (displayed as W601, W602...)
+ */
+export function getStartNumber(series: string): number {
+  switch (series) {
+    case 'REGULAR': return 6001;
+    case 'OWWA': return 9001;
+    case 'FRA': return 1;
+    case 'WALKIN_REGULAR': return 601;
+    default: return 1;
+  }
+}
+
+/**
+ * Format queue number for display on ticket.
+ * - REGULAR: "6001", "6002"
+ * - OWWA: "9001", "9002"
+ * - FRA: "A001", "A002"
+ * - WALKIN_REGULAR: "W601", "W602"
+ */
+export function formatQueueDisplay(queueNumber: number, series: string): string {
+  switch (series) {
+    case 'FRA':
+      return `A${String(queueNumber).padStart(3, '0')}`;
+    case 'WALKIN_REGULAR':
+      return `W${queueNumber}`;
+    default:
+      return String(queueNumber);
+  }
+}
+
+/** Resolve human-readable service label from service_id */
+export function resolveServiceLabel(serviceId: string): string {
+  for (const [key, id] of Object.entries(SERVICE_ID_MAP)) {
+    if (id === serviceId) return SERVICE_LABELS[key] ?? key.replace(/_/g, ' ');
+  }
+  return 'Contract Verification';
+}
+
+/** OFW Transaction type options for walk-in registration */
+export const OFW_TRANS_OPTIONS = [
+  'Change in Employer',
+  'Change in Position',
+  'Change in Jobsite',
+  'New Record',
+] as const;
 
 /** Ref code charset (matches AgencyHire) */
 export const REF_CODE_CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';

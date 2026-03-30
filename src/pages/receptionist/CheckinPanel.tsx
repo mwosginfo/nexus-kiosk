@@ -1,20 +1,11 @@
 import { useState } from 'react';
 import { QueueNumberDisplay } from '../../components/QueueNumberDisplay';
-import { SERVICE_LABELS, SERVICE_ID_MAP } from '../../lib/constants';
+import { resolveServiceLabel } from '../../lib/constants';
 import * as appointmentService from '../../services/appointment.service';
 import * as fraService from '../../services/fra.service';
-import * as checkinBridge from '../../services/checkin-bridge.service';
-import * as nexusApi from '../../services/nexus-api.client';
+import * as queueService from '../../services/queue.service';
 import type { AppointmentWithService } from '../../schemas/appointment.schema';
 import type { FraRegistrationRow } from '../../schemas/fra.schema';
-
-/** Resolve service label from service_id */
-function resolveServiceLabel(serviceId: string): string {
-  for (const [key, id] of Object.entries(SERVICE_ID_MAP)) {
-    if (id === serviceId) return SERVICE_LABELS[key] ?? key.replace(/_/g, ' ');
-  }
-  return 'Contract Verification';
-}
 
 type SelectedItem =
   | { readonly type: 'appointment'; readonly data: AppointmentWithService }
@@ -39,63 +30,71 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: Check
       if (selected.type === 'appointment') {
         const appt = selected.data;
 
-        // 1. Mark arrived on Supabase
-        await appointmentService.markArrived(appt.id);
-
-        // 2. Get queue number — try direct API first, fall back to bridge
-        let displayNumber: string;
-        if (nexusApi.isAuthenticated()) {
-          try {
-            const apiResult = await nexusApi.checkin(appt.ref_code);
-            displayNumber = String(apiResult.entry.queueNumber);
-          } catch {
-            const bridgeResult = await checkinBridge.requestCheckin(appt.ref_code, 'APPOINTMENT');
-            displayNumber = bridgeResult.displayNumber;
-          }
-        } else {
-          const bridgeResult = await checkinBridge.requestCheckin(appt.ref_code, 'APPOINTMENT');
-          displayNumber = bridgeResult.displayNumber;
+        // Check duplicate
+        const dup = await queueService.checkDuplicate(appt.ref_code);
+        if (dup) {
+          setError(`Already checked in as Q#${dup.displayNumber}.`);
+          setChecking(false);
+          return;
         }
+
+        // Look up service info
+        const serviceInfo = await appointmentService.lookupServiceInfo(appt.service_id);
 
         const name = [appt.ofw_fname, appt.ofw_mname, appt.ofw_lname]
           .filter(Boolean)
           .join(' ');
         const serviceLabel = resolveServiceLabel(appt.service_id);
 
-        onCheckinComplete(displayNumber, name);
+        // Assign queue number + write to kiosk_checkins
+        const assignment = await queueService.checkinAndAssignQueue({
+          refCode: appt.ref_code,
+          appointmentType: 'APPOINTMENT',
+          queueSeries: serviceInfo.series,
+          serviceType: serviceInfo.serviceType,
+          clientName: name,
+          clientEmail: appt.client_email,
+          appointmentId: appt.id,
+          transactionRef: appt.ref_code,
+        });
 
-        // Print in background — don't block UI
+        onCheckinComplete(assignment.displayNumber, name);
+
+        // Print in background
         window.electronAPI.printTicket({
-          queueNumber: displayNumber,
+          queueNumber: assignment.displayNumber,
           clientName: name,
           serviceType: serviceLabel,
         }).catch((err: unknown) => console.error('[CheckinPanel] Print error:', err));
       } else {
         const fra = selected.data;
 
-        // 1. Mark arrived on Supabase
-        await fraService.markArrived(fra.id);
-
-        // 2. Get queue number — try direct API first, fall back to bridge
-        let displayNumber: string;
-        if (nexusApi.isAuthenticated()) {
-          try {
-            const apiResult = await nexusApi.fraCheckin(fra.transaction_ref);
-            displayNumber = apiResult.displayNumber;
-          } catch {
-            const bridgeResult = await checkinBridge.requestCheckin(fra.transaction_ref, 'FRA');
-            displayNumber = bridgeResult.displayNumber;
-          }
-        } else {
-          const bridgeResult = await checkinBridge.requestCheckin(fra.transaction_ref, 'FRA');
-          displayNumber = bridgeResult.displayNumber;
+        // Check duplicate
+        const dup = await queueService.checkDuplicate(fra.transaction_ref);
+        if (dup) {
+          setError(`Already checked in as Q#${dup.displayNumber}.`);
+          setChecking(false);
+          return;
         }
 
-        onCheckinComplete(displayNumber, fra.fra);
+        // Assign FRA queue number + write to kiosk_checkins
+        const assignment = await queueService.checkinAndAssignQueue({
+          refCode: fra.transaction_ref,
+          appointmentType: 'FRA',
+          queueSeries: 'FRA',
+          serviceType: 'FRA_REGISTRATION',
+          clientName: fra.fra,
+          transactionRef: fra.transaction_ref,
+        });
 
-        // Print in background — don't block UI
+        // Mark arrived (fire-and-forget)
+        fraService.markArrived(fra.id).catch(() => {});
+
+        onCheckinComplete(assignment.displayNumber, fra.fra);
+
+        // Print in background
         window.electronAPI.printTicket({
-          queueNumber: displayNumber,
+          queueNumber: assignment.displayNumber,
           clientName: fra.fra,
           serviceType: 'FRA Registration',
         }).catch((err: unknown) => console.error('[CheckinPanel] Print error:', err));
@@ -148,8 +147,7 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: Check
   if (selected.type === 'appointment') {
     const a = selected.data;
     const name = [a.ofw_fname, a.ofw_mname, a.ofw_lname].filter(Boolean).join(' ');
-    const serviceLabel = a.services?.name ?? SERVICE_LABELS[a.service_id] ?? a.service_id;
-    const isAlreadyArrived = a.appt_status === 'ARRIVED';
+    const serviceLabel = a.services?.name ?? resolveServiceLabel(a.service_id);
 
     return (
       <div className="space-y-6">
@@ -171,7 +169,7 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: Check
             </div>
             <div>
               <p className="text-xs text-gray-400 uppercase">Status</p>
-              <p className="text-gray-700">{a.status} {a.appt_status ? ` (${a.appt_status})` : ''}</p>
+              <p className="text-gray-700">{a.status}</p>
             </div>
             <div>
               <p className="text-xs text-gray-400 uppercase">Date / Time</p>
@@ -188,26 +186,19 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: Check
           <p className="text-sm text-red-500 bg-red-50 rounded-lg px-4 py-3">{error}</p>
         )}
 
-        {isAlreadyArrived ? (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-yellow-700 text-sm">
-            This appointment is already marked as arrived.
-          </div>
-        ) : (
-          <button
-            onClick={() => void handleCheckin()}
-            disabled={checking}
-            className="w-full py-4 text-lg font-bold text-white bg-teal-500 rounded-xl hover:bg-teal-600 disabled:opacity-50 transition-colors"
-          >
-            {checking ? 'Checking In...' : 'Check In & Print Ticket'}
-          </button>
-        )}
+        <button
+          onClick={() => void handleCheckin()}
+          disabled={checking}
+          className="w-full py-4 text-lg font-bold text-white bg-teal-500 rounded-xl hover:bg-teal-600 disabled:opacity-50 transition-colors"
+        >
+          {checking ? 'Checking In...' : 'Check In & Print Ticket'}
+        </button>
       </div>
     );
   }
 
   // Selected FRA detail
   const f = selected.data;
-  const isAlreadyArrived = f.status === 'arrived';
 
   return (
     <div className="space-y-6">
@@ -232,47 +223,23 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: Check
             <p className="text-gray-700">{f.pra}</p>
           </div>
           <div>
-            <p className="text-xs text-gray-400 uppercase">Workers</p>
-            <p className="text-gray-700">{f.workers.length} worker{f.workers.length !== 1 ? 's' : ''}</p>
-          </div>
-          <div>
             <p className="text-xs text-gray-400 uppercase">Status</p>
             <p className="text-gray-700">{f.status}</p>
           </div>
         </div>
-
-        {/* Worker list */}
-        {f.workers.length > 0 && (
-          <div>
-            <p className="text-xs text-gray-400 uppercase mb-2">Workers</p>
-            <div className="space-y-1">
-              {f.workers.map((w, i) => (
-                <p key={i} className="text-sm text-gray-600">
-                  {i + 1}. {w.last_name}, {w.first_name} {w.middle_name ?? ''} — {w.employer}
-                </p>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       {error && (
         <p className="text-sm text-red-500 bg-red-50 rounded-lg px-4 py-3">{error}</p>
       )}
 
-      {isAlreadyArrived ? (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-yellow-700 text-sm">
-          This FRA registration is already marked as arrived.
-        </div>
-      ) : (
-        <button
-          onClick={() => void handleCheckin()}
-          disabled={checking}
-          className="w-full py-4 text-lg font-bold text-white bg-blue-500 rounded-xl hover:bg-blue-600 disabled:opacity-50 transition-colors"
-        >
-          {checking ? 'Checking In...' : 'Check In & Print Ticket'}
-        </button>
-      )}
+      <button
+        onClick={() => void handleCheckin()}
+        disabled={checking}
+        className="w-full py-4 text-lg font-bold text-white bg-blue-500 rounded-xl hover:bg-blue-600 disabled:opacity-50 transition-colors"
+      >
+        {checking ? 'Checking In...' : 'Check In & Print Ticket'}
+      </button>
     </div>
   );
 }

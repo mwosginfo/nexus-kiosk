@@ -19,61 +19,64 @@ function buildReceiptHtml(data: TicketData): string {
     minute: '2-digit',
   });
 
-  const paperWidth = settingsStore.get('paperWidth') ?? '80mm';
-  const contentWidth = paperWidth === '58mm' ? '54mm' : '76mm';
-
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <title>Queue Ticket</title>
 <style>
-  @page { size: ${paperWidth} auto; margin: 2mm; }
+  @page { size: 80mm auto; margin: 2mm; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    font-family: 'Courier New', monospace;
-    width: ${contentWidth};
+    font-family: Arial, Helvetica, sans-serif;
+    width: 72mm;
     text-align: center;
     padding: 4mm 2mm;
   }
   .header {
     font-size: 11pt;
     font-weight: bold;
-    line-height: 1.3;
-  }
-  .datetime {
-    font-size: 9pt;
-    margin: 2mm 0 3mm;
+    line-height: 1.4;
   }
   .divider {
     border-top: 1px dashed #000;
     margin: 3mm 0;
   }
   .queue-number {
-    font-size: 48pt;
-    font-weight: bold;
-    letter-spacing: 2mm;
+    font-size: 56pt;
+    font-weight: 900;
     margin: 4mm 0;
   }
   .service {
-    font-size: 12pt;
-    font-weight: bold;
+    font-size: 11pt;
+    font-weight: 700;
+    margin: 2mm 0;
+  }
+  .client {
+    font-size: 10pt;
+    font-weight: 600;
+    margin: 1mm 0;
+  }
+  .datetime {
+    font-size: 9pt;
     margin: 2mm 0;
   }
   .footer {
-    font-size: 9pt;
-    margin-top: 4mm;
+    font-size: 8pt;
+    margin-top: 3mm;
+    line-height: 1.4;
   }
 </style>
 </head>
 <body>
-  <div class="header">Migrant Workers Office - Singapore</div>
-  <div class="datetime">${dateStr} ${timeStr}</div>
+  <div class="header">MIGRANT WORKERS OFFICE<br>SINGAPORE</div>
   <div class="divider"></div>
   <div class="queue-number">${data.queueNumber}</div>
   <div class="service">${data.serviceType.replace(/_/g, ' ')}</div>
+  <div class="client">${data.clientName}</div>
   <div class="divider"></div>
-  <div class="footer">Please proceed to the consular area.</div>
+  <div class="datetime">${dateStr}  ${timeStr}</div>
+  <div class="footer">Please wait for your<br>number to be called.</div>
 </body>
 </html>`;
 }
@@ -83,9 +86,14 @@ export function registerPrintHandlers(): void {
     const printerName = (settingsStore.get('printerName') ?? '').trim();
     const html = buildReceiptHtml(data);
 
-    // Validate printer exists before attempting to print
+    // Use the main window to print — avoids hidden-window print cancellation issues
     const mainWindow = BrowserWindow.getAllWindows()[0];
-    if (mainWindow && printerName) {
+    if (!mainWindow) {
+      throw new Error('No window available for printing');
+    }
+
+    // Validate printer exists
+    if (printerName) {
       const printers = mainWindow.webContents.getPrintersAsync
         ? await mainWindow.webContents.getPrintersAsync()
         : [];
@@ -93,58 +101,66 @@ export function registerPrintHandlers(): void {
       if (!match) {
         const available = printers.map((p) => p.name).join(', ');
         throw new Error(
-          `Printer "${printerName}" not found. Available: ${available || '(none)'}`
+          `Printer "${printerName}" not found. Available: ${available || '(none)'}`,
         );
       }
     }
 
-    // Create a hidden window to render and print the receipt
+    // Create an offscreen window (not hidden — positioned off-screen)
+    // This avoids the "print job canceled" bug with show:false on some Windows setups
     const printWindow = new BrowserWindow({
       show: false,
       width: 400,
-      height: 600,
+      height: 800,
+      x: -10000,
+      y: -10000,
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
       },
     });
 
-    await printWindow.loadURL(
-      `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
-    );
+    // Show the window off-screen (some printer drivers require a visible window)
+    printWindow.showInactive();
 
-    // Wait for content to finish rendering before printing
-    await new Promise<void>((resolve) => {
-      printWindow.webContents.once('did-finish-load', () => resolve());
-      // If already loaded (data URL), resolve immediately
-      if (!printWindow.webContents.isLoading()) resolve();
-    });
-
-    return new Promise<void>((resolve, reject) => {
-      printWindow.webContents.print(
-        {
-          silent: true,
-          printBackground: true,
-          ...(printerName ? { deviceName: printerName } : {}),
-        },
-        (success, failureReason) => {
-          printWindow.close();
-          if (success) {
-            resolve();
-          } else {
-            reject(
-              new Error(
-                failureReason ?? 'Print job canceled — check printer is online and paper is loaded'
-              )
-            );
-          }
-        }
+    try {
+      await printWindow.loadURL(
+        `data:text/html;charset=utf-8,${encodeURIComponent(html)}`,
       );
-    });
+
+      // Give the renderer a moment to layout/paint
+      await new Promise<void>((r) => setTimeout(r, 500));
+
+      return await new Promise<void>((resolve, reject) => {
+        printWindow.webContents.print(
+          {
+            silent: true,
+            printBackground: true,
+            margins: { marginType: 'none' },
+            pageSize: { width: 80000, height: 297000 }, // 80mm x auto (microns)
+            ...(printerName ? { deviceName: printerName } : {}),
+          },
+          (success, failureReason) => {
+            if (success) {
+              console.log('[print] Ticket printed successfully');
+              resolve();
+            } else {
+              console.error('[print] Print failed:', failureReason);
+              reject(
+                new Error(
+                  failureReason ?? 'Print job canceled — check printer is online and paper is loaded',
+                ),
+              );
+            }
+          },
+        );
+      });
+    } finally {
+      printWindow.close();
+    }
   });
 
   ipcMain.handle('get-printers', async () => {
-    // We need a window reference to get printers
     const windows = BrowserWindow.getAllWindows();
     const win = windows[0];
     if (!win) return [];

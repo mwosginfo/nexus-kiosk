@@ -5,7 +5,8 @@ import { WalkInModal } from './WalkInModal';
 import { StatusBanner } from '../../components/StatusBanner';
 import { useMode } from '../../contexts/ModeContext';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faGear, faUserPlus } from '@fortawesome/free-solid-svg-icons';
+import { faGear, faUserPlus, faBolt } from '@fortawesome/free-solid-svg-icons';
+import * as queueService from '../../services/queue.service';
 import type { AppointmentWithService } from '../../schemas/appointment.schema';
 import type { FraRegistrationRow } from '../../schemas/fra.schema';
 import mwoLogo from '../../assets/mwo_logo.png';
@@ -19,10 +20,32 @@ export function ReceptionistLayout() {
   const [selected, setSelected] = useState<SelectedItem | null>(null);
   const [walkInOpen, setWalkInOpen] = useState(false);
   const [lastCheckin, setLastCheckin] = useState<{ queueNumber: string; name: string } | null>(null);
+  const [owwaLoading, setOwwaLoading] = useState(false);
 
   function handleCheckinComplete(queueNumber: string, name: string) {
     setLastCheckin({ queueNumber, name });
     setSelected(null);
+  }
+
+  async function handleOwwaQuick() {
+    setOwwaLoading(true);
+    try {
+      const assignment = await queueService.owwaQuickQueue();
+
+      // Print in background
+      window.electronAPI.printTicket({
+        queueNumber: assignment.displayNumber,
+        clientName: '',
+        serviceType: 'OWWA',
+      }).catch((err: unknown) => console.error('[OWWA Quick] Print error:', err));
+
+      setLastCheckin({ queueNumber: assignment.displayNumber, name: 'OWWA Client' });
+      setSelected(null);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'OWWA queue number failed');
+    } finally {
+      setOwwaLoading(false);
+    }
   }
 
   return (
@@ -36,8 +59,17 @@ export function ReceptionistLayout() {
             Receptionist
           </span>
         </div>
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-3">
           <StatusBanner />
+          <button
+            onClick={() => void handleOwwaQuick()}
+            disabled={owwaLoading}
+            className="px-4 py-2 text-sm text-white bg-amber-500 rounded-lg hover:bg-amber-600 disabled:opacity-50 flex items-center gap-2"
+            title="Generate OWWA queue number (no client details)"
+          >
+            <FontAwesomeIcon icon={faBolt} />
+            {owwaLoading ? '...' : 'OWWA'}
+          </button>
           <button
             onClick={() => setWalkInOpen(true)}
             className="px-4 py-2 text-sm text-white bg-blue-500 rounded-lg hover:bg-blue-600 flex items-center gap-2"

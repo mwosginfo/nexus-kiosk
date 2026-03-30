@@ -42,12 +42,10 @@ Both modes produce the same result: a queue number + thermal ticket.
 ### Queue Number Series
 | Type | Start | Display Format | Example |
 |------|-------|---------------|---------|
-| Regular | 6000 daily | Plain number | 6001, 6002 |
-| OWWA | 9000 daily | Plain number | 9001, 9002 |
-| FRA | 1 daily | A-prefix + 3 digits | A001, A002 |
-| Walk-in Regular | W600+ | W-prefix | W601, W602 |
-| Walk-in OWWA | W900+ | W-prefix | W901, W902 |
-| Walk-in FRA | WA prefix | WA + 2 digits | WA01, WA02 |
+| Regular | 6001 daily | Plain number | 6001, 6002 |
+| OWWA | 9001 daily | Plain number (same series for appt + walk-in) | 9001, 9002 |
+| FRA | 1 daily | A-prefix + 3 zero-padded digits | A001, A002 |
+| Walk-in Regular | 601 daily | W-prefix | W601, W602 |
 
 ### Appointment Name Fields (Supabase → Kiosk)
 The Supabase `appointments` table uses OFW-prefixed name columns:

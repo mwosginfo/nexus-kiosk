@@ -16,9 +16,7 @@ export interface KioskSettings {
   readonly rememberMode: boolean;
   readonly supabaseUrl: string;
   readonly supabaseAnonKey: string;
-  readonly nexusApiUrl: string;
-  readonly nexusUsername: string;
-  readonly nexusPassword: string;
+  readonly supabaseServiceKey: string;
   readonly printerName: string;
   readonly paperWidth: '58mm' | '80mm';
 }

@@ -1,62 +1,80 @@
--- ═══════════════════════════════════════════════════════════════════════════
--- kiosk_checkins — Supabase bridge table for kiosk → Nexus queue assignment
---
--- Flow:
---   1. Kiosk INSERTs a row (ref_code, appointment_type) with status = PENDING
---   2. Nexus Realtime listener picks up the INSERT
---   3. Nexus generates queue number, UPDATEs the row (queue_number, display_number, etc.)
---   4. Kiosk subscribes to Realtime for the UPDATE → prints ticket
--- ═══════════════════════════════════════════════════════════════════════════
+-- =============================================================================
+-- kiosk_checkins — the unified queue table written by the kiosk app.
+-- Nexus backend reads this table for queue display and processing.
+-- =============================================================================
 
-create table if not exists kiosk_checkins (
-  id              uuid primary key default gen_random_uuid(),
-  ref_code        text not null,
-  appointment_type text not null
-    check (appointment_type in ('APPOINTMENT', 'FRA')),
+CREATE TABLE IF NOT EXISTS kiosk_checkins (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-  -- Filled by Nexus after processing
-  queue_number    int,                    -- raw queue number (e.g., 6001, 1)
-  display_number  text,                   -- formatted for ticket (e.g., '6001', 'A001', 'W601')
-  queue_series    text,                   -- 'REGULAR', 'OWWA', 'FRA'
-  service_type    text,                   -- Prisma ServiceType value for reference
+  -- Check-in identity
+  ref_code          TEXT NOT NULL,
+  appointment_type  TEXT NOT NULL CHECK (appointment_type IN ('APPOINTMENT', 'FRA', 'WALKIN')),
 
-  status          text not null default 'PENDING'
-    check (status in ('PENDING', 'PROCESSED', 'FAILED')),
-  error_message   text,                   -- populated on FAILED
+  -- Queue assignment (written by kiosk)
+  queue_number      INT NOT NULL,
+  display_number    TEXT NOT NULL,
+  queue_series      TEXT NOT NULL,
+  service_type      TEXT,
+  status            TEXT NOT NULL DEFAULT 'WAITING'
+                    CHECK (status IN (
+                      'PENDING','WAITING','CALLED','PROCESSING','SUBMITTED',
+                      'CONFIRMED','PROCESSED','OR_ISSUED','MISSED','DEFERRED',
+                      'RECEIVED','FAILED'
+                    )),
 
-  created_at      timestamptz not null default now(),
-  processed_at    timestamptz
+  -- Client info (written by kiosk)
+  client_name       TEXT,
+  client_email      TEXT,
+  appointment_id    UUID,
+  transaction_ref   TEXT,
+  queue_date        DATE NOT NULL DEFAULT CURRENT_DATE,
+
+  -- Timestamps
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  -- Nexus backend fields (NOT written by kiosk)
+  assigned_to       TEXT,
+  counter_number    INT,
+  called_at         TIMESTAMPTZ,
+  completed_at      TIMESTAMPTZ,
+  processed_at      TIMESTAMPTZ,
+  remarks           TEXT,
+  deferral_reason   TEXT,
+  error_message     TEXT
 );
 
--- Index for Nexus listener: quickly find unprocessed rows
-create index if not exists idx_kiosk_checkins_pending
-  on kiosk_checkins (status) where status = 'PENDING';
+-- Prevent duplicate queue numbers per day per series
+CREATE UNIQUE INDEX IF NOT EXISTS uq_kiosk_checkins_queue
+  ON kiosk_checkins (queue_date, queue_number, queue_series);
 
--- Index for cleanup queries
-create index if not exists idx_kiosk_checkins_created_at
-  on kiosk_checkins (created_at);
+CREATE INDEX IF NOT EXISTS idx_kiosk_checkins_ref ON kiosk_checkins (ref_code);
+CREATE INDEX IF NOT EXISTS idx_kiosk_checkins_date ON kiosk_checkins (queue_date);
+CREATE INDEX IF NOT EXISTS idx_kiosk_checkins_status ON kiosk_checkins (status);
+CREATE INDEX IF NOT EXISTS idx_kiosk_checkins_series ON kiosk_checkins (queue_series);
 
--- ─── Row Level Security ─────────────────────────────────────────────────────
+-- Auto-update updated_at
+CREATE OR REPLACE FUNCTION update_kiosk_checkins_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
-alter table kiosk_checkins enable row level security;
+DROP TRIGGER IF EXISTS trg_kiosk_checkins_updated_at ON kiosk_checkins;
+CREATE TRIGGER trg_kiosk_checkins_updated_at
+  BEFORE UPDATE ON kiosk_checkins
+  FOR EACH ROW EXECUTE FUNCTION update_kiosk_checkins_updated_at();
 
--- Kiosk (anon key) can insert new check-in requests
-create policy "kiosk_insert" on kiosk_checkins
-  for insert with check (true);
+-- Enable Realtime
+ALTER PUBLICATION supabase_realtime ADD TABLE kiosk_checkins;
 
--- Kiosk can read rows (to get the result via Realtime or polling)
-create policy "kiosk_read" on kiosk_checkins
-  for select using (true);
+-- RLS
+ALTER TABLE kiosk_checkins ENABLE ROW LEVEL SECURITY;
 
--- Service role (Nexus backend) bypasses RLS and can UPDATE — no extra policy needed.
+CREATE POLICY kiosk_checkins_anon_select ON kiosk_checkins
+  FOR SELECT USING (true);
 
--- ─── Enable Realtime ────────────────────────────────────────────────────────
--- Run this in the Supabase SQL editor to enable Realtime for the table:
-alter publication supabase_realtime add table kiosk_checkins;
-
--- ─── Cleanup: auto-delete rows older than 24 hours ──────────────────────────
--- Option A: pg_cron (if available in your Supabase plan)
--- select cron.schedule('cleanup-kiosk-checkins', '0 3 * * *',
---   $$delete from kiosk_checkins where created_at < now() - interval '24 hours'$$
--- );
--- Option B: manual cleanup via a daily Nexus cron job (implemented in kiosk-bridge)
+CREATE POLICY kiosk_checkins_service_all ON kiosk_checkins
+  FOR ALL USING (true) WITH CHECK (true);

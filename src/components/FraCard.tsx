@@ -27,11 +27,9 @@ export function FraCard({ fra, selected, onClick }: FraCardProps) {
         <div>
           <p className="font-semibold text-gray-800">{fra.fra}</p>
           <p className="text-sm text-gray-500">
-            {fra.agency_personnel} &bull; {fra.workers.length} worker{fra.workers.length !== 1 ? 's' : ''}
+            {fra.agency_personnel ?? 'No personnel'} &bull; PRA: {fra.pra ?? 'N/A'}
           </p>
-          <p className="text-xs text-gray-400 mt-1">
-            PRA: {fra.pra} &bull; {fra.appointment_date}
-          </p>
+          <p className="text-xs text-gray-400 mt-1">{fra.appointment_date}</p>
         </div>
         <div className="flex flex-col items-end gap-1">
           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${statusColors[fra.status] ?? 'bg-gray-100 text-gray-600'}`}>

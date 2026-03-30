@@ -7,33 +7,10 @@ import { SuccessScreen } from './SuccessScreen';
 import { ErrorScreen } from './ErrorScreen';
 import { useIdleTimer } from '../../hooks/useIdleTimer';
 import { useScanner } from '../../hooks/useScanner';
-import { UUID_REGEX, SERVICE_LABELS } from '../../lib/constants';
+import { UUID_REGEX, resolveServiceLabel } from '../../lib/constants';
 import * as appointmentService from '../../services/appointment.service';
 import * as fraService from '../../services/fra.service';
-import * as checkinBridge from '../../services/checkin-bridge.service';
-import * as nexusApi from '../../services/nexus-api.client';
-
-/** Resolve a human-readable service label from service_id or bridge serviceType */
-function resolveServiceLabel(serviceId: string, bridgeServiceType?: string): string {
-  // Try matching service_id against known labels
-  for (const [key, id] of Object.entries(
-    // Import would be circular — inline the ID map
-    {
-      SKILLED_CV: '30c55940-083c-434a-8212-e810f2fa37b2',
-      MDW_CV: 'cc50f069-1dc6-48ac-9e04-dbaf2a28b839',
-      OWWA: '23470e2d-397e-4a24-b3ee-f55ed3fec65c',
-      DH: 'ff4eeaf1-0009-4664-b9d8-6ea48de0f745',
-      FRA_REGISTRATION: '7b9257b9-b2b6-404c-b277-c585ef27ec34',
-    } as Record<string, string>,
-  )) {
-    if (id === serviceId) return SERVICE_LABELS[key] ?? key.replace(/_/g, ' ');
-  }
-  // Fallback to bridge value if it's not a UUID
-  if (bridgeServiceType && !/^[0-9a-f-]{36}$/i.test(bridgeServiceType)) {
-    return bridgeServiceType.replace(/_/g, ' ');
-  }
-  return 'Contract Verification';
-}
+import * as queueService from '../../services/queue.service';
 
 type KioskScreen =
   | 'SPLASH'
@@ -60,48 +37,49 @@ export function KioskLayout() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Auto-return to splash after 60s idle (except on splash itself)
-  useIdleTimer(
-    60_000,
-    () => setScreen('SPLASH'),
-    screen !== 'SPLASH'
-  );
+  useIdleTimer(60_000, () => setScreen('SPLASH'), screen !== 'SPLASH');
 
-  // Perform the full checkin flow — tries direct Nexus API first, falls back to Supabase bridge
   const doCheckin = useCallback(async (value: string, type: AppointmentType) => {
     setLoading(true);
     try {
       if (type === 'fra') {
-        // FRA flow
+        // ─── FRA flow ────────────────────────────────────────────────
         const fra = await fraService.lookupByRef(value);
         if (!fra) {
+          setErrorMsg('No FRA registration found for today.');
           setScreen('ERROR');
           return;
         }
 
-        if (fra.status !== 'arrived') {
-          await fraService.markArrived(fra.id);
+        if (fra.status === 'completed' || fra.status === 'cancelled') {
+          setErrorMsg(`This FRA registration is ${fra.status} and cannot be checked in.`);
+          setScreen('ERROR');
+          return;
         }
 
-        let displayNumber: string;
-
-        // Try direct API first (LAN), fall back to bridge (external)
-        if (nexusApi.isAuthenticated()) {
-          try {
-            const apiResult = await nexusApi.fraCheckin(fra.transaction_ref);
-            displayNumber = apiResult.displayNumber;
-          } catch (apiErr) {
-            console.warn('[KioskLayout] Direct API failed, trying bridge:', apiErr);
-            const bridgeResult = await checkinBridge.requestCheckin(fra.transaction_ref, 'FRA');
-            displayNumber = bridgeResult.displayNumber;
-          }
-        } else {
-          const bridgeResult = await checkinBridge.requestCheckin(fra.transaction_ref, 'FRA');
-          displayNumber = bridgeResult.displayNumber;
+        // Check duplicate
+        const dup = await queueService.checkDuplicate(value);
+        if (dup) {
+          setErrorMsg(`Already checked in as Q#${dup.displayNumber}.`);
+          setScreen('ERROR');
+          return;
         }
+
+        // Get queue number + insert kiosk_checkins
+        const assignment = await queueService.checkinAndAssignQueue({
+          refCode: value,
+          appointmentType: 'FRA',
+          queueSeries: 'FRA',
+          serviceType: 'FRA_REGISTRATION',
+          clientName: fra.fra,
+          transactionRef: fra.transaction_ref,
+        });
+
+        // Mark FRA as arrived (fire-and-forget)
+        fraService.markArrived(fra.id).catch(() => {});
 
         const checkinResult: CheckinResult = {
-          queueNumber: displayNumber,
+          queueNumber: assignment.displayNumber,
           name: fra.fra,
           serviceType: 'FRA Registration',
         };
@@ -109,56 +87,66 @@ export function KioskLayout() {
         setResult(checkinResult);
         setScreen('SUCCESS');
 
-        // Print in background — don't block success screen
         window.electronAPI.printTicket({
           queueNumber: checkinResult.queueNumber,
           clientName: checkinResult.name,
           serviceType: checkinResult.serviceType,
         }).catch((err: unknown) => console.error('[KioskLayout] Print error:', err));
       } else {
-        // Regular appointment flow
+        // ─── Regular appointment flow ────────────────────────────────
         const appt = await appointmentService.lookupByRefCode(value);
         if (!appt) {
+          setErrorMsg('No appointment found for this QR code.');
           setScreen('ERROR');
           return;
         }
 
-        if (appt.appt_status !== 'ARRIVED') {
-          await appointmentService.markArrived(appt.id);
+        // Validate status + date
+        const validation = appointmentService.validateAppointment(appt);
+        if (!validation.ok) {
+          setErrorMsg(validation.message);
+          setScreen('ERROR');
+          return;
         }
 
-        const name = [appt.ofw_fname, appt.ofw_mname, appt.ofw_lname]
+        // Check duplicate
+        const dup = await queueService.checkDuplicate(appt.ref_code);
+        if (dup) {
+          setErrorMsg(`Already checked in as Q#${dup.displayNumber}.`);
+          setScreen('ERROR');
+          return;
+        }
+
+        // Look up service info (slug → series + serviceType)
+        const serviceInfo = await appointmentService.lookupServiceInfo(appt.service_id);
+
+        const clientName = [appt.ofw_fname, appt.ofw_mname, appt.ofw_lname]
           .filter(Boolean)
           .join(' ');
+
+        // Get queue number + insert kiosk_checkins
+        const assignment = await queueService.checkinAndAssignQueue({
+          refCode: appt.ref_code,
+          appointmentType: 'APPOINTMENT',
+          queueSeries: serviceInfo.series,
+          serviceType: serviceInfo.serviceType,
+          clientName,
+          clientEmail: appt.client_email,
+          appointmentId: appt.id,
+          transactionRef: appt.ref_code,
+        });
+
         const serviceLabel = resolveServiceLabel(appt.service_id);
 
-        let displayNumber: string;
-
-        // Try direct API first (LAN), fall back to bridge (external)
-        if (nexusApi.isAuthenticated()) {
-          try {
-            const apiResult = await nexusApi.checkin(appt.ref_code);
-            displayNumber = String(apiResult.entry.queueNumber);
-          } catch (apiErr) {
-            console.warn('[KioskLayout] Direct API failed, trying bridge:', apiErr);
-            const bridgeResult = await checkinBridge.requestCheckin(appt.ref_code, 'APPOINTMENT');
-            displayNumber = bridgeResult.displayNumber;
-          }
-        } else {
-          const bridgeResult = await checkinBridge.requestCheckin(appt.ref_code, 'APPOINTMENT');
-          displayNumber = bridgeResult.displayNumber;
-        }
-
         const checkinResult: CheckinResult = {
-          queueNumber: displayNumber,
-          name,
+          queueNumber: assignment.displayNumber,
+          name: clientName,
           serviceType: serviceLabel,
         };
 
         setResult(checkinResult);
         setScreen('SUCCESS');
 
-        // Print in background — don't block success screen
         window.electronAPI.printTicket({
           queueNumber: checkinResult.queueNumber,
           clientName: checkinResult.name,
@@ -167,25 +155,24 @@ export function KioskLayout() {
       }
     } catch (err) {
       console.error('[KioskLayout] Checkin error:', err);
-      setErrorMsg(err instanceof Error ? err.message : 'Check-in failed');
+      setErrorMsg(err instanceof Error ? err.message : 'Check-in failed. Please try again.');
       setScreen('ERROR');
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Phone lookup — regular appointments only (FRA uses transaction_ref only)
   const doPhoneCheckin = useCallback(async (phone: string) => {
     setLoading(true);
     try {
       const results = await appointmentService.lookupByPhone(phone);
       if (results.length === 0) {
+        setErrorMsg('No appointment found for this phone number.');
         setScreen('ERROR');
         return;
       }
       await doCheckin(results[0]!.ref_code, 'regular');
     } catch (err) {
-      console.error('[KioskLayout] Phone checkin error:', err);
       setErrorMsg(err instanceof Error ? err.message : 'Search failed');
       setScreen('ERROR');
     } finally {
@@ -193,7 +180,6 @@ export function KioskLayout() {
     }
   }, [doCheckin]);
 
-  // Global QR scanner — always active except on splash
   useScanner({
     onScan: (scanned) => {
       if (screen === 'SPLASH') return;
@@ -211,34 +197,23 @@ export function KioskLayout() {
     }
   }
 
-  // ─── Render screens ──────────────────────────────────────────────────────
-
   switch (screen) {
     case 'SPLASH':
       return <SplashScreen onStart={() => setScreen('TYPE_SELECT')} />;
-
     case 'TYPE_SELECT':
       return (
         <TypeSelectScreen
-          onSelect={(type) => {
-            setAppointmentType(type);
-            setScreen('SEARCH_METHOD');
-          }}
+          onSelect={(type) => { setAppointmentType(type); setScreen('SEARCH_METHOD'); }}
         />
       );
-
     case 'SEARCH_METHOD':
       return (
         <SearchMethodScreen
           appointmentType={appointmentType}
-          onSelectMethod={(method) => {
-            setSearchMode(method);
-            setScreen('MANUAL_SEARCH');
-          }}
+          onSelectMethod={(method) => { setSearchMode(method); setScreen('MANUAL_SEARCH'); }}
           onBack={() => setScreen('TYPE_SELECT')}
         />
       );
-
     case 'MANUAL_SEARCH':
       return (
         <ManualSearchScreen
@@ -248,15 +223,8 @@ export function KioskLayout() {
           onBack={() => setScreen('SEARCH_METHOD')}
         />
       );
-
     case 'SUCCESS':
-      return (
-        <SuccessScreen
-          result={result}
-          onDone={() => setScreen('SPLASH')}
-        />
-      );
-
+      return <SuccessScreen result={result} onDone={() => setScreen('SPLASH')} />;
     case 'ERROR':
       return (
         <ErrorScreen

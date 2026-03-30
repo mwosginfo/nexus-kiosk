@@ -6,9 +6,6 @@ export const KioskSettingsSchema = z.object({
   supabaseUrl: z.string(),
   supabaseAnonKey: z.string(),
   supabaseServiceKey: z.string(),
-  nexusApiUrl: z.string(),
-  nexusUsername: z.string(),
-  nexusPassword: z.string(),
   printerName: z.string(),
   paperWidth: z.enum(['58mm', '80mm']),
 });

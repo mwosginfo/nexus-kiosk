@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { initSupabase, initSupabaseService } from '../services/supabase.client';
-import * as nexusApi from '../services/nexus-api.client';
 
 type AppMode = 'RECEPTIONIST' | 'KIOSK' | null;
 
@@ -32,27 +31,15 @@ export function ModeProvider({ children }: { readonly children: ReactNode }) {
           ...s,
           supabaseUrl: s.supabaseUrl || (import.meta.env['VITE_SUPABASE_URL'] as string | undefined ?? ''),
           supabaseAnonKey: s.supabaseAnonKey || (import.meta.env['VITE_SUPABASE_ANON_KEY'] as string | undefined ?? ''),
-          nexusApiUrl: s.nexusApiUrl || (import.meta.env['VITE_NEXUS_API_URL'] as string | undefined ?? ''),
         };
         setSettings(merged);
 
-        // Initialize services if configured
+        // Initialize Supabase clients if configured
         if (s.supabaseUrl && s.supabaseAnonKey) {
           initSupabase(s.supabaseUrl, s.supabaseAnonKey);
         }
         if (s.supabaseUrl && s.supabaseServiceKey) {
           initSupabaseService(s.supabaseUrl, s.supabaseServiceKey);
-        }
-        if (s.nexusApiUrl) {
-          nexusApi.configure(s.nexusApiUrl);
-        }
-        // Auto-login to Nexus if credentials saved
-        if (s.nexusApiUrl && s.nexusUsername && s.nexusPassword) {
-          try {
-            await nexusApi.login(s.nexusUsername, s.nexusPassword);
-          } catch {
-            // Will show as disconnected in status banner
-          }
         }
       } catch (err) {
         console.error('Failed to load settings:', err);
@@ -79,7 +66,7 @@ export function ModeProvider({ children }: { readonly children: ReactNode }) {
     await window.electronAPI.saveSettings(partial);
     setSettings((prev) => (prev ? { ...prev, ...partial } : prev));
 
-    // Re-initialize services if relevant settings changed
+    // Re-initialize Supabase if relevant settings changed
     if (partial.supabaseUrl !== undefined || partial.supabaseAnonKey !== undefined) {
       const url = partial.supabaseUrl ?? settings?.supabaseUrl ?? '';
       const key = partial.supabaseAnonKey ?? settings?.supabaseAnonKey ?? '';
@@ -89,9 +76,6 @@ export function ModeProvider({ children }: { readonly children: ReactNode }) {
       const url = partial.supabaseUrl ?? settings?.supabaseUrl ?? '';
       const sKey = partial.supabaseServiceKey ?? settings?.supabaseServiceKey ?? '';
       if (url && sKey) initSupabaseService(url, sKey);
-    }
-    if (partial.nexusApiUrl !== undefined) {
-      nexusApi.configure(partial.nexusApiUrl);
     }
   }, [settings]);
 
