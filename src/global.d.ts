@@ -17,7 +17,8 @@ interface KioskSettings {
   readonly supabaseAnonKey: string;
   readonly supabaseServiceKey: string;
   readonly printerName: string;
-  readonly paperWidth: '58mm' | '80mm';
+  readonly paperWidth: '80mm';
+  readonly autoPrint: boolean;
 }
 
 interface ElectronAPI {

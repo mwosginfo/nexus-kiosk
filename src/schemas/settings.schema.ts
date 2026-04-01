@@ -7,6 +7,7 @@ export const KioskSettingsSchema = z.object({
   supabaseAnonKey: z.string(),
   supabaseServiceKey: z.string(),
   printerName: z.string(),
-  paperWidth: z.enum(['58mm', '80mm']),
+  paperWidth: z.literal('80mm'),
+  autoPrint: z.boolean(),
 });
 export type KioskSettingsType = z.infer<typeof KioskSettingsSchema>;

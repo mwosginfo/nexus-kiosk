@@ -11,8 +11,6 @@ export function SettingsPage() {
   const [supabaseAnonKey, setSupabaseAnonKey] = useState(settings?.supabaseAnonKey ?? '');
   const [supabaseServiceKey, setSupabaseServiceKey] = useState(settings?.supabaseServiceKey ?? '');
   const [printerName, setPrinterName] = useState(settings?.printerName ?? '');
-  const [paperWidth, setPaperWidth] = useState<'58mm' | '80mm'>(settings?.paperWidth ?? '80mm');
-
   useEffect(() => {
     void window.electronAPI.getPrinters().then(setPrinters);
   }, []);
@@ -23,7 +21,6 @@ export function SettingsPage() {
       supabaseAnonKey,
       supabaseServiceKey,
       printerName,
-      paperWidth,
     });
     toggleSettings();
   }
@@ -187,14 +184,7 @@ export function SettingsPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-600 mb-1">Paper Width</label>
-              <select
-                value={paperWidth}
-                onChange={(e) => setPaperWidth(e.target.value as '58mm' | '80mm')}
-                className="w-full px-3 py-2 border rounded-lg text-sm"
-              >
-                <option value="58mm">58mm</option>
-                <option value="80mm">80mm</option>
-              </select>
+              <p className="px-3 py-2 text-sm text-gray-500">80mm (standard thermal)</p>
             </div>
             <div className="pt-5">
               <button

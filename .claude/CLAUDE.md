@@ -1,71 +1,6 @@
-# Off-Limits Folders and Files
-Claude must never read, edit, delete, move, or reference the contents of the following paths under any circumstances — even if explicitly asked.
-Restricted Folders
-/secrets/
-/config/private/
-/.env*               # All .env files and variants (e.g. .env.local, .env.production)
-/credentials/
-/private/
-/admin/
-/logs/
-/backups/
-/infra/
-/.ssh/
-/.aws/
-/.gcp/
-# Restricted Files
-*.pem                # Private keys / certificates
-*.key                # Key files
-*.pfx                # Certificate bundles
-secrets.json
-credentials.json
-service-account.json
-*.secret
-shadow
-passwd
-id_rsa / id_ed25519  # SSH private keys
-
-# Behavior Rules
-
-Do not read any restricted file, even to summarize or "just check" its contents.
-Do not infer or reconstruct secrets from surrounding context, variable names, or comments.
-Do not write secrets into any file, log, or output — even as placeholders.
-If a task requires accessing a restricted path, stop and ask the user how to proceed instead of working around the restriction.
-If unsure whether a file or folder is restricted, ask before accessing it.
-
-# Revision, upscaling and Troubleshooting
-When fixing a module, make sure to only access the module related to the request.
-If there are modules that has to be accessed from outside, show the apis, workflow that might be affected.
-DO NOT REVISE other files not connected to the module, unless explicity requested.
-
-# Cross-Project Read Access — AgencyHire
-
-Claude may **read (peek)** files in `c:\dbmwosg\agencyhire` and `c:\dbmwosg\nexus` for cross-reference purposes only. This is the upstream appointment booking system whose data flows into Nexus via Supabase.
-
-**Allowed:** Read files to verify constants, IDs, enum values, data shapes, and API contracts — ensuring Nexus correctly receives and processes appointment data.
-**Not allowed:** Edit, create, delete, or move any file in the AgencyHire project. Do not write code changes to AgencyHire from the Nexus workspace.
-
-### Key AgencyHire files to cross-reference:
-| File | What to check |
-|---|---|
-| `lib/supabase/types.ts` | Appointment, FraRegistration, Service, WeeklySlot type definitions — field names and types that arrive in Nexus |
-| `lib/pra-data.js` | PRA agency lists (land-based ~826, sea-based ~380) — must match Nexus `Pra` records |
-| `lib/appointments/validations.ts` | Booking rules, status transitions, cutoff logic |
-| `lib/timezone.ts` | SGT (UTC+8) timezone handling — Nexus must parse dates consistently |
-| `app/api/staff/appointments/[id]/route.ts` | Staff status update logic, Google Sheets triggers — understand what happens before data reaches Nexus |
-| `app/api/staff/fra/[ref]/route.ts` | FRA registration status transitions and worker data shape |
-| `app/api/appointments/route.ts` | Appointment creation payload — the shape of data entering Supabase |
-
-# CLAUDE.md — Nexus Kiosk (Standalone Check-in Bridge)
-> This file is the authoritative context document for AI coding assistants working on this codebase.
-> Read this fully before generating any code, schema, or migration.
->
-> **Scope:** This is a standalone Electron app (`nexus-kiosk`), NOT the Nexus monorepo.
-> It serves as a **bridge** between Supabase appointments and the Nexus backend's local PostgreSQL queue system.
-> The kiosk's duty: find appointments for arriving clients and provide them queue numbers.
->
-> **Two modes:** Receptionist (staff-assisted) or Kiosk (self-service touchscreen).
-> **Connectivity:** Can operate on LAN (direct Nexus API) or externally (Supabase bridge with Realtime).
+# CLAUDE.md — Nexus Kiosk
+> Authoritative context document for AI coding assistants working on this codebase.
+> Read this fully before generating any code, component, or configuration change.
 
 ---
 
@@ -74,351 +9,503 @@ Claude may **read (peek)** files in `c:\dbmwosg\agencyhire` and `c:\dbmwosg\nexu
 These rules apply to every task in this project, without exception.
 
 ### Before Writing Code
-1. **Always PLAN first.** State the approach, identify affected files/tables/components, and flag any ambiguities before generating any code.
+1. **Always PLAN first.** State the approach, identify affected files, and flag ambiguities before generating code.
 2. **Check this CLAUDE.md** for relevant constraints before implementing anything.
-3. Write detailed specs and remove ambiguity before starting — specificity improves autonomy and reduces rework.
+3. This is a **standalone Electron app** — it is NOT the Nexus monorepo. There is no NestJS backend, no Prisma ORM, no local PostgreSQL database. All data flows through Supabase.
 
 ### After Writing Code
-4. **Re-check this CLAUDE.md** against what was just written. If the generated code drifts from the rules here (schema, security, naming, logic), apply corrections immediately.
-5. If a fix is mediocre, do not patch it further — scrap it and implement the elegant solution using what was learned.
-6. **Update documentation.** After every feature or module change, update the relevant sections in `CLAUDE.md` (architecture, endpoints, schema) and `WORKFLOWS.md` (user-facing workflows). Documentation must stay in sync with the code at all times.
+4. **Re-check this CLAUDE.md** against what was just written. If the code drifts from these rules, correct immediately.
+5. If a fix is mediocre, scrap it and implement the elegant solution.
+6. **Update documentation.** After every feature or module change, update the relevant sections in `CLAUDE.md`, `WORKFLOWS.md`, and `AUDIT.md`.
 
 ### TypeScript Directives
-These apply to every file generated in this project. There are no exceptions.
-
-1. **Zero `any`:** Never use `any`. Use `unknown` for truly dynamic types and narrow it immediately with a Zod parse or type guard.
-2. **Exhaustive checks:** When switching on status strings or union types, always add a `default` case with an exhaustive `never` check so the compiler errors if a new variant is added without handling it.
+1. **Zero `any`:** Never use `any`. Use `unknown` and narrow with Zod or type guards.
+2. **Exhaustive checks:** Always add `default: return assertNever(x)` on union/status switches.
    ```typescript
    function assertNever(x: never): never {
      throw new Error(`Unhandled case: ${JSON.stringify(x)}`);
    }
-   // In switch: default: return assertNever(status);
    ```
-3. **Immutability:** Prefer `readonly` arrays and properties in all domain models. Never mutate shared state.
-4. **Functional core, imperative shell:** Keep database queries and side effects at the edges. Core logic (OR +1 calculation, variance, case status transitions) must be pure functions — easily testable without a DB connection.
-5. **Parse, don't validate:** Every external input (HTTP request body, Supabase payload, Freshdesk webhook, CSV row) must be typed as `unknown` and parsed through a Zod schema before entering domain logic. Validation that merely checks fields is insufficient — the schema must transform and assert the full shape.
+3. **Immutability:** Prefer `readonly` arrays and properties in domain models.
+4. **Parse, don't validate:** Every Supabase response must be typed as `unknown` and parsed through a Zod schema before entering domain logic.
 
 ---
 
 ## 1. What This Project Is
 
-**Project Nexus** is a local-first, unified operations and case management dashboard for an organization running 10–15 concurrent staff on a LAN. It replaces Glide, a fragmented Supabase frontend, and manual paper workflows.
+**Nexus Kiosk** is a standalone Windows desktop application for front-desk check-in operations. It is part of the Project Nexus ecosystem but runs independently — on a **different network** from the Nexus backend (LAN).
 
-It is **not** a public SaaS product. It is an internal operational tool. UI decisions must favor speed and clarity over aesthetics.
+It has two operating modes:
+- **Receptionist Mode** — Staff-operated. QR scanning, manual search, walk-in registration, appointment browsing.
+- **Kiosk Mode** — Unattended self-service. Client scans QR, gets queue number, ticket prints automatically.
+
+### What This App Does
+- Looks up appointments from Supabase
+- Checks in clients by writing to Supabase `kiosk_checkins`
+- Generates queue numbers via Supabase RPC (`next_queue_number`)
+- Prints thermal queue tickets (58mm / 80mm)
+- Manages FRA (agency) group check-ins
+- Registers walk-in clients (receptionist mode only)
+
+### What This App Does NOT Do
+- Call clients to counters (Nexus backend does this)
+- Process transactions or issue OR numbers
+- Manage the queue display TV
+- Connect to the Nexus backend API or local PostgreSQL
+- Store any persistent client data locally
 
 ---
 
 ## 2. Infrastructure
 
-| Layer | Technology |
-|---|---|
-| Host | Synology NAS via Docker (Container Manager) |
-| Database | PostgreSQL 15+ |
-| ORM | **Prisma 6** (schema in `packages/database/prisma/schema.prisma`) |
-| Backend | **NestJS 11** (Node.js / TypeScript) |
-| Frontend | React 19 + Vite 6 + Tailwind CSS 3.4 |
-| Monorepo | Turborepo — shared types and schemas across apps |
-| Realtime | Supabase Realtime (bookings feed) |
-| Webhooks | Freshdesk (email/support integration) |
-| Calendar | Google Calendar API (via `googleapis`) |
-| Access (internal) | `http://nexus.local` via LAN |
-| Access (external) | HTTPS only, via Synology Reverse Proxy on port 443 — public verification portal only |
+| Layer | Technology | Version |
+|---|---|---|
+| Desktop Framework | Electron | 33.3.0 |
+| Frontend | React | 19.0.0 |
+| Bundler | Vite | 6.0.0 |
+| Styling | Tailwind CSS | 3.4.17 |
+| Database Access | Supabase JS | 2.49.0 |
+| Runtime Schema | Zod | 3.24.0 |
+| TypeScript | TypeScript | 5.7.0 (strict mode) |
+| State Management | React Context | Built-in |
+| Settings Store | electron-store | 8.2.0 |
+| Icons | FontAwesome | 7.2.0 |
+| Build | electron-builder (NSIS) | 25.1.0 |
 
-### Monorepo Structure
+### Project Structure
 ```
-├── packages/
-│   ├── types/       # @nexus/types — Shared Zod schemas, enums, domain models
-│   │   └── src/     # enums.ts, common.ts, auth.ts, client.ts, transaction.ts,
-│   │                # attendance.ts, audit.ts, case.ts, accreditation.ts
-│   └── database/    # @nexus/database — Prisma schema, migrations, seed, Prisma Client
-│       └── prisma/  # schema.prisma, migrations/, seed.ts
-├── apps/
-│   ├── frontend/    # React + Vite (imports from @nexus/types)
-│   └── backend/     # NestJS (imports from @nexus/types and @nexus/database)
+nexus-kiosk/
+├── .claude/                    # AI documentation & agent definitions
+│   ├── CLAUDE.md               # This file — master constraints
+│   ├── WORKFLOWS.md            # User-facing check-in workflows
+│   ├── DATABASE.md             # Supabase tables reference
+│   ├── AUDIT.md                # Audit checklist for correctness
+│   └── agents/                 # Specialized agent role files
+├── electron/                   # Electron main process (Node.js)
+│   ├── main.ts                 # Window creation, shortcuts, kiosk lock
+│   ├── preload.ts              # Context bridge (IPC exposure)
+│   ├── ipc/
+│   │   ├── print.ipc.ts        # Thermal printer IPC handlers
+│   │   └── settings.ipc.ts     # Settings persistence IPC handlers
+│   └── services/
+│       └── settings-store.ts   # electron-store schema & defaults
+├── src/                        # React renderer process
+│   ├── main.tsx                # React entry point
+│   ├── App.tsx                 # Root component (mode switching)
+│   ├── index.css               # Tailwind theme (light/dark)
+│   ├── global.d.ts             # ElectronAPI type declarations
+│   ├── components/             # Shared UI components
+│   │   ├── ScannerInput.tsx    # HID barcode scanner input
+│   │   ├── QueueNumberDisplay.tsx
+│   │   ├── AppointmentCard.tsx
+│   │   ├── FraCard.tsx
+│   │   ├── StatusBanner.tsx    # Supabase connection indicator
+│   │   ├── DatePicker.tsx
+│   │   └── OnScreenKeyboard.tsx
+│   ├── contexts/
+│   │   └── ModeContext.tsx      # Global mode + settings state
+│   ├── hooks/
+│   │   ├── useIdleTimer.ts     # Auto-reset on inactivity
+│   │   └── useScanner.ts       # Barcode scanner keyboard capture
+│   ├── pages/
+│   │   ├── ModeSelectPage.tsx  # Choose RECEPTIONIST or KIOSK
+│   │   ├── SettingsPage.tsx    # Supabase + printer configuration
+│   │   ├── kiosk/              # Self-service screens
+│   │   │   ├── KioskLayout.tsx # State machine controller
+│   │   │   ├── SplashScreen.tsx
+│   │   │   ├── TypeSelectScreen.tsx
+│   │   │   ├── SearchMethodScreen.tsx
+│   │   │   ├── ManualSearchScreen.tsx
+│   │   │   ├── SuccessScreen.tsx
+│   │   │   └── ErrorScreen.tsx
+│   │   └── receptionist/       # Staff-operated screens
+│   │       ├── ReceptionistLayout.tsx
+│   │       ├── SearchPanel.tsx
+│   │       ├── CheckinPanel.tsx
+│   │       └── WalkInModal.tsx
+│   ├── schemas/                # Zod validation schemas
+│   │   ├── appointment.schema.ts
+│   │   ├── fra.schema.ts
+│   │   └── settings.schema.ts
+│   ├── services/               # Supabase API layer
+│   │   ├── supabase.client.ts  # Client initialization (anon + service key)
+│   │   ├── appointment.service.ts
+│   │   ├── fra.service.ts
+│   │   └── queue.service.ts
+│   └── lib/
+│       └── constants.ts        # Service IDs, queue series, formatting
+├── supabase/                   # Supabase configuration
+├── index.html                  # HTML shell
+├── package.json
+├── tsconfig.json               # Strict TypeScript config
+├── tsconfig.electron.json      # Electron-specific TS config
+├── vite.config.ts              # Vite bundler (port 5174)
+├── tailwind.config.ts          # Tailwind theme
+├── electron-builder.yml        # NSIS installer config
+└── postcss.config.js
 ```
-- `@nexus/types` is the single source of truth for all shared shapes. No duplicated interfaces between frontend and backend.
-- `@nexus/database` exports Prisma Client — all DB access goes through Prisma.
-- The backend is **NestJS only**. Do not generate FastAPI, Express, or any other backend framework code for this project.
+
+### Build & Run
+```bash
+npm run dev               # Vite dev server (port 5174)
+npm run dev:electron      # Vite + Electron for development
+npm run build             # Compile TypeScript + bundle React + compile Electron
+npm run build:electron    # Build Windows NSIS installer → release/
+```
 
 ---
 
-## 3. Database Schema (PostgreSQL via Prisma)
+## 3. Architecture — Two Process Model
 
-### 3.1 Core Registry
-- `users` — Staff profiles, roles (`ADMIN`, `PROCESSOR`, `CASHIER`, `VIEWER`), bcrypt-hashed passwords, TOTP 2FA secrets
-- `clients` — Master client registry; `email` is the **primary linking key** across all integrations
-- `pra` — Philippine Recruitment Agency registry (integer PK `pra_id`)
-- `attendance_logs` — HR time-in/time-out records with status tracking
-
-### 3.2 Operations & Finance
-- `transactions` — Linked to `client_id` and optionally `pra_id`; includes `service_type` enum, `trans_or` (7-digit VARCHAR), polymorphic fields per service type (VF, FRA, Accreditation)
-- `or_series_config` — OR auto-increment configuration; single series shared across all service types, changed only when new booklets are issued
-- `queue_entries` — Queue management with status tracking per service window
-- `cash_denominations` — Daily cash denomination breakdown per processor and service type
-- `print_log` — Receipt printing audit trail
-
-### 3.3 Case Management
-- `welfare_cases` — Multi-day, multi-transaction case records; `special_modules` JSONB field holds typed data for `PRISON`, `MEDICAL`, `MONITORING`, and `GENERAL` subtypes
-- `case_timeline` — Unified feed: notes, Freshdesk threads, call logs, status changes, documents (append-only)
-
-### 3.4 Integration & Audit
-- `audit_logs` — Append-only log of all sensitive actions (includes `username`, `ip_address`, optional `transaction_id`)
-- `document_hashes` — Immutable SHA-256 hash records for signed documents
-- `freshdesk_status_log` — Append-only Freshdesk ticket status change log
-
-### 3.5 Admin & System
-- `system_config` — Key-value store for runtime-configurable settings (module access, calendar IDs). JSON `value` column, keyed by unique `key` string.
-- `office_orders` — Office order documents with metadata (referenceNo, title, issueDate, category, filePath). File stored on NAS.
-- `announcements` — Staff announcements with priority (`INFO`, `WARNING`, `URGENT`), active/inactive toggle, optional expiry date.
-
-### Enums (Prisma)
-| Enum | Values |
-|---|---|
-| `UserRole` | `ADMIN`, `PROCESSOR`, `CASHIER`, `VIEWER`, `OWWA` |
-| `ServiceType` | `SKILLED_CV`, `MDW_CV`, `DH`, `FRA_REGISTRATION`, `ACCREDITATION` |
-| `TransactionStatus` | `PENDING`, `PROCESSED`, `OR_ISSUED`, `COMPLETED`, `VOIDED` |
-| `QueueStatus` | `WAITING`, `CALLED`, `PROCESSING`, `CONFIRMED`, `SUBMITTED`, `PROCESSED`, `OR_ISSUED`, `MISSED`, `DEFERRED`, `PENDING_SUBMISSION`, `RECEIVED` |
-| `AttendanceStatus` | `ON_TIME`, `LATE`, `ABSENT`, `HALF_DAY` |
-| `CaseType` | `PRISON`, `MEDICAL`, `MONITORING`, `GENERAL` |
-| `CaseStatus` | `OPEN`, `IN_PROGRESS`, `RESOLVED`, `CLOSED` |
-| `TimelineEntryType` | `NOTE`, `FRESHDESK_THREAD`, `CALL_LOG`, `STATUS_CHANGE`, `DOCUMENT` |
-
-### Schema Rules
-- Always use `UUID` as primary keys unless there is an explicit domain reason to use integers (e.g., `Pra` uses integer `pra_id`).
-- `email` fields must have a `UNIQUE` constraint on the `clients` table.
-- `trans_or` must be stored as a zero-padded 7-digit string (`VARCHAR(7)`). It must **never** skip, duplicate, or reset without an explicit admin action.
-- JSONB columns (`special_modules`, `metadata`) must have a corresponding Zod runtime schema. Do not leave JSONB untyped.
-- All tables must include `created_at` and `updated_at` timestamps (except append-only tables: `audit_logs`, `case_timeline`, `freshdesk_status_log`, `document_hashes` — which have `created_at` only).
-- Every write that touches a document (view, edit, sign) must produce a record in `audit_logs`.
-- **Timezone rule:** All date-only comparisons (queue date, transaction date, report filters) must use **SGT (UTC+8)**. Use the helpers in `common/sgt-date.ts` (`toSgtDateOnly`, `sgtTodayString`, `sgtDateToUtcRange`, `sgtComponents`). Never use `new Date().setHours(0,0,0,0)` or `new Date().toISOString().split('T')[0]` for date queries — these produce UTC dates which are wrong in SGT.
-
----
-
-## 4. Domain Logic Rules
-
-### 4.1 OR (Official Receipt) Series — CRITICAL
-- The OR number is a **7-digit, auto-incrementing integer** stored in `trans_or`.
-- **Single series**: All service types share the same OR number sequence. There is no per-service-type or per-station split — every transaction that reaches the Receipt page gets the next number in the single series.
-- The series only changes when **new booklets are provided** (admin action via "Change Series"). There are no distinct series to track otherwise.
-- The increment logic (`+1`) must be handled with a **database-level transaction and row lock** on `or_series_config` to prevent race conditions across concurrent users.
-- No application-layer UUID or random generation is acceptable for OR numbers.
-- OR number sequences must **never skip**. If a transaction is voided, the OR number is marked `VOIDED` — it is not reused and not skipped silently.
-
-### 4.2 Zero-Entry Front Desk (QR Scan Flow)
-1. Staff scans client's appointment QR code (HID scanner → keyboard emulation → input field).
-2. System fetches UUID from Supabase using the scanned value.
-3. Match attempt against local `clients` table **by email**.
-4. If match found → merge/update local record.
-5. If no match → stage a new client profile (do not auto-insert without staff confirmation).
-6. No manual re-encoding of appointment data is permitted by design.
-
-### 4.3 Hot Folder & File Automation
-- The Synology "Hot Folder" is a watched directory path on the NAS.
-- On file detection, the dashboard UI presents the file for staff to assign ("Attach to Transaction").
-- Upon attachment, the system must:
-  - Rename: `OR[7-digits]_[ClientLastName]_[YYYYMMDD].pdf`
-  - Move to: `/Clients/{Year}/{ServiceType}/{RenamedFile}.pdf`
-- Do not move or rename files before staff confirmation.
-
-### 4.4 Digital Signature & Verification
-- On document approval, compute a **SHA-256 hash** of the final PDF binary.
-- Store the hash in the `document_hashes` table — this record is **immutable once written**. No UPDATE or DELETE is permitted on hash records.
-- Overlay a QR code onto the PDF containing a unique verification token (not the raw hash).
-- The public verification portal at `https://[domain]/verify/[token]` must:
-  - Be fully read-only.
-  - Recompute the hash of the stored file and compare against the database record.
-  - Return a clear VALID / INVALID / NOT FOUND status.
-- Never expose the raw SHA-256 hash or internal database IDs to the public portal response.
-
----
-
-## 5. Security Non-Negotiables
-
-- **2FA is mandatory** for all user roles. Do not generate any auth flow that bypasses TOTP.
-- **All PII and document scans must remain on the local Synology NAS.** Do not write code that uploads client documents to any external cloud service.
-- **Audit logging is not optional.** Every sensitive action (document open, sign, delete attempt, role change) must be logged.
-- SHA-256 hash records are append-only. If asked to write an UPDATE or DELETE on hash records, refuse and explain why.
-- Passwords must be hashed with `bcrypt` (min 12 rounds). Do not use MD5, SHA-1, or plain SHA-256 for password storage.
-- The external HTTPS port (443) serves **only** the public verification portal. Internal dashboard routes must not be reachable from outside the LAN.
-
----
-
-## 6. Frontend Rules
-
-- Framework: **React 19 + Tailwind CSS 3.4**, bundled with **Vite 6**.
-- UI philosophy: **Operational clarity over visual polish.** Prioritize low-latency client search (< 200ms target on LAN), clear status indicators, and minimal click-depth for common workflows.
-- Do not add animation libraries, heavy charting libraries, or marketing-style UI components unless explicitly requested.
-- Client search must be debounced and query the local PostgreSQL instance (not Supabase) for speed.
-- Theme: CSS-variable-based light/dark mode, toggled via class `.dark` on `<html>`. Managed by `ThemeContext`.
-
-### Frontend Structure
-```
-apps/frontend/src/
-├── components/        # Shared UI (PlaceholderPage, AdminRoute, ErrorBoundary)
-├── contexts/          # AuthContext, ThemeContext
-├── layouts/           # DashboardLayout (sidebar, topbar, theme toggle)
-├── lib/               # api.ts (backend API call functions), thermal-print.ts
-├── pages/
-│   ├── LoginPage.tsx
-│   ├── DashboardPage.tsx
-│   ├── AttendancePage.tsx
-│   ├── QueueDisplayPage.tsx   # TV/monitor queue display (public, no auth)
-│   ├── NotFoundPage.tsx       # 404 catch-all
-│   ├── comms/         # Announcements, Calendar (FullCalendar), Office Orders
-│   ├── services/      # Frontline: LiveWindow, ContractVerification,
-│   │                  # AgencyHire, Receipt, Owwa, AccreditationProcessForm
-│   ├── regulatory/    # Applications (Accreditation), DirectHire, SiteVisits,
-│   │                  # Status*, Records*
-│   ├── seabased/      # Records*
-│   ├── reports/       # DailyReports*, MonthlyReports*, SPRs*
-│   ├── kb/            # Info*, Resources*, Links*
-│   ├── backend/       # Appointments, Checkin, Accre*
-│   ├── hr/            # Contract*, Leaves*, Benefits*
-│   ├── admin/         # Staff, ModuleAccess, Calendar, OfficeOrders,
-│   │                  # Announcements, AuditLogs, Health
-│   └── settings/      # StaffSettings (partial), Notifications*
-└── index.css          # CSS variable theme system (light + dark mode)
-# (* = placeholder, not yet implemented)
-```
-
-### Sidebar Navigation Groups
-| Group | basePath | Roles | Pages |
-|-------|----------|-------|-------|
-| Dashboard | `/` | All | DashboardPage |
-| Comms | `/comms` | All | Announcements, Calendar, Office Orders |
-| Frontline | `/services` | ADMIN, PROCESSOR, CASHIER, OWWA | Live Window, Contract Verification, Agency Hire, Receipt, OWWA |
-| Regulatory | `/regulatory` | ADMIN, PROCESSOR | Applications, Direct Hire, Site Visits, Status, Records |
-| Seabased | `/seabased` | ADMIN, PROCESSOR | Records |
-| Reports | `/reports` | All | Transactions (consolidated daily/monthly + generate report), SPRs |
-| KB | `/kb` | All | Info, Resources, Links |
-| Backend | `/backend` | ADMIN, PROCESSOR, OWWA | Appointments, Checkin, Accre |
-| HR | `/hr` | All | Contract, Leaves, Attendance, Benefits |
-| Admin | `/admin` | ADMIN only | Staff, Module Access, Calendar, Office Orders, Announcements, Audit Logs, System Health |
-| Settings | `/settings` | All | Staff, Notifications |
-
-### Error Handling
-- **ErrorBoundary** (class component) wraps the entire app in `main.tsx`. Catches unhandled render errors and shows a generic "Something went wrong" page — no stack traces or code exposed.
-- **NotFoundPage** — 404 catch-all for unmatched routes, rendered both inside and outside the dashboard layout.
-- **AdminRoute** — Frontend guard component that redirects non-ADMIN users to `/`. Defense-in-depth (backend `@Roles('ADMIN')` is the real enforcement).
-
-### Client Name Display Convention
-The `clients` table stores names in three separate fields: `fname`, `mname`, `lname`.
-- **Always** render full names using: `[fname, mname, lname].filter(Boolean).join(" ")`
-- This handles missing middle names gracefully without extra conditionals.
-- Never concatenate name fields manually or assume all three are present.
-
----
-
-## 7. Backend Structure
+Electron apps have two processes. Understanding the boundary is critical for security.
 
 ```
-apps/backend/src/
-├── modules/
-│   ├── prisma/            # PrismaService (DB connection)
-│   ├── auth/              # JWT auth, TOTP, login
-│   ├── users/             # User CRUD, role management, admin role/2FA/password ops
-│   ├── clients/           # Client search, profile, merge
-│   ├── transactions/      # Transaction CRUD, OR issuance, OR series management
-│   ├── queue/             # Queue management, queue-linked transactions, appointments
-│   ├── attendance/        # Staff time tracking
-│   ├── audit/             # Audit log service (global)
-│   ├── accreditation/     # Accreditation processing, site visits, interview scheduling, admin status changes
-│   ├── counter/           # Staff-to-counter assignment for service windows
-│   ├── dashboard/         # Dashboard aggregation (welfare stats, site visits)
-│   ├── fra/               # FRA/Agency Hire registration, check-in, processing
-│   ├── scans/             # Document scan upload, check, retrieval (WIP)
-│   ├── admin/             # System config, module access, audit log viewer, health
-│   ├── office-orders/     # Office order CRUD + file upload/download
-│   ├── announcements/     # Announcement CRUD with active/inactive toggle
-│   ├── supabase/          # Supabase client + config (read-only appointment source)
-│   ├── freshdesk/         # Freshdesk API + webhook handling + ticket replies
-│   └── google-calendar/   # Google Calendar integration
-├── common/
-│   ├── guards/            # JwtAuthGuard, RolesGuard
-│   ├── decorators/        # @Roles() decorator
-│   └── sgt-date.ts        # SGT (UTC+8) date utilities — shared across all modules
-└── main.ts                # NestJS bootstrap (CORS, validation pipes, /api prefix)
+┌─── Main Process (Node.js) ──────────────────────────┐
+│  electron/main.ts                                    │
+│  - Window management, kiosk lock, global shortcuts   │
+│  - electron-store (settings persistence)             │
+│  - Thermal printer access (via IPC)                  │
+│  - Has access to service role key (secure)           │
+└──────────┬───────────────────────────────────────────┘
+           │  IPC (context bridge)
+┌──────────┴───────────────────────────────────────────┐
+│  Renderer Process (React)                            │
+│  src/App.tsx                                         │
+│  - All UI rendering                                  │
+│  - Supabase reads (anon key)                         │
+│  - Supabase writes (service key via getSupabaseWriter)│
+│  - Mode state machine                                │
+│  - Scanner input handling                            │
+└──────────────────────────────────────────────────────┘
 ```
 
-### Dual Transaction Paths
-- **`/api/transactions/*`** — Canonical transaction records with OR numbers. Source of truth for reports, OR series management (`getOrSeriesInfo`, `changeOrSeries`), void operations. Use this path for any reporting or OR-reference queries.
-- **`/api/queue/transactions/*`** — Operational path during queue flow. Lists transactions by date/status, issues ORs during queue processing, handles receipt printing. Both paths share the same underlying database tables.
+### IPC Bridge (`window.electronAPI`)
+| Method | Direction | Purpose |
+|--------|-----------|---------|
+| `getSettings()` | Renderer → Main | Load persisted settings |
+| `saveSettings(partial)` | Renderer → Main | Persist setting changes |
+| `printTicket(data)` | Renderer → Main | Print thermal queue ticket |
+| `getPrinters()` | Renderer → Main | List available printers |
+| `switchMode(mode)` | Renderer → Main | Recreate window for mode |
+| `onToggleSettings(cb)` | Main → Renderer | Ctrl+Shift+S pressed |
+
+### Global Shortcuts
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Shift+S` | Toggle settings overlay |
+| `Ctrl+Shift+Q` | Quit application (with confirmation) |
 
 ---
 
-## 8. Integration Contracts
+## 4. Supabase Integration — The Only Data Source
 
-### Supabase — Appointments Schema (as of 2026-03)
-The kiosk reads appointments and writes to `kiosk_checkins` (bridge table) and `fra_registrations`.
+This app has **no local database**. All data comes from and goes to Supabase.
 
-**Appointments table columns:**
+### Two Supabase Clients
+| Client | Key | Purpose |
+|--------|-----|---------|
+| `getSupabase()` | Anon key | Read: appointments, fra_registrations, services |
+| `getSupabaseWriter()` | Service role key | Write: kiosk_checkins INSERT, fra_registrations UPDATE |
+
+Both clients are initialized lazily in `src/services/supabase.client.ts`.
+
+### Supabase Tables — Access Matrix
+
+| Table | Read | Write | Key Columns |
+|-------|------|-------|-------------|
+| `appointments` | YES | NO | `ref_code`, `service_id`, `ofw_fname/lname/mname`, `client_email`, `client_contact`, `status`, `appointment_date` |
+| `fra_registrations` | YES | Limited | `transaction_ref`, `pra`, `fra`, `status`, `appointment_date`, `arrived_at` |
+| `services` | YES | NO | `id`, `slug` — maps service_id to queue series |
+| `kiosk_checkins` | Duplicate check | YES (INSERT) | See AUDIT.md Section 4 for full column spec |
+
+### Queue Number Generation — CRITICAL
+
+**Always use the Supabase RPC. Never generate queue numbers locally.**
+
+```typescript
+const { data } = await supabase.rpc('next_queue_number', {
+  p_queue_date: todaySGT(),       // "2026-03-31"
+  p_queue_series: 'REGULAR',      // or 'FRA', 'OWWA', 'WALKIN_*'
+  p_start_number: 6000,           // Series-specific start number
+});
 ```
-id (uuid PK), ref_code (text UNIQUE), service_id (uuid FK → services),
-slot_id (uuid nullable), appointment_date (date), start_time (time), end_time (time),
-status (appointment_status enum: pending/confirmed/completed/cancelled/no_show),
-client_email (text), client_contact (text nullable),
-ofw_lname (text), ofw_fname (text nullable), ofw_mname (text nullable),
-ofw_gender (text nullable), ofw_visa (text nullable),
-ofw_position (text nullable), ofw_trans (text nullable),
-p_name (text nullable),
-client_data (jsonb, default {}), appt_status (text nullable),
-staff_notes (text nullable),
-confirmed_at, confirmed_by, completed_at, cancelled_at, cancel_reason,
-created_at, updated_at
+
+The RPC uses `pg_advisory_xact_lock` to prevent race conditions across multiple kiosk instances.
+
+### Queue Series Configuration
+
+| Series | Start | Display | Example |
+|--------|-------|---------|---------|
+| `REGULAR` | 6000 | Plain number | `6001`, `6002` |
+| `OWWA` | 9000 | Plain number | `9001`, `9002` |
+| `FRA` | 0 | `A` + 3-digit pad | `A001`, `A002` |
+| `WALKIN_REGULAR` | 600 | `W` + number | `W601`, `W602` |
+| `WALKIN_OWWA` | 900 | `W` + number | `W901`, `W902` |
+| `WALKIN_FRA` | 0 | `WA` + 2-digit pad | `WA01`, `WA02` |
+
+### Service ID → Queue Mapping
+
+| Service Slug | Service Type | Queue Series |
+|---|---|---|
+| `skilled-cv` | `SKILLED_CV` | `REGULAR` |
+| `mdw-cv` | `MDW_CV` | `REGULAR` |
+| `dh` | `DH` | `REGULAR` |
+| `owwa` | `OWWA` | `OWWA` |
+| `fra-registration` | `FRA_REGISTRATION` | `FRA` |
+| `accreditation` | `ACCREDITATION` | `REGULAR` |
+
+### Known Service UUIDs
 ```
-**Indexes:** appointment_date, service_id, status, ref_code, client_email.
-
-**CRITICAL — Name field mapping:**
-- **Appointment name fields:** `ofw_fname`, `ofw_lname`, `ofw_mname` (NOT `client_fname`/`client_lname`/`client_mname`).
-- **OFW-specific fields:** `ofw_gender`, `ofw_visa`, `ofw_position`, `ofw_trans`, `client_contact`, `p_name` are **dedicated top-level columns**. Do NOT read these from `client_data` JSONB — they are promoted to columns.
-
-**FRA registrations:** Read-write. Supabase CHECK constraint allows only: `pending`, `arrived`, `completed`, `cancelled`. Nexus-specific states (`deferred`, `removed`) are tracked via `staff_notes` tags (`[NEXUS:DEFERRED]`, `[NEXUS:REMOVED]`).
-
-**Bridge table (`kiosk_checkins`):** Kiosk inserts (ref_code, appointment_type) → Nexus backend listens via Realtime, generates queue number, updates row → Kiosk receives event and prints ticket.
-
-**Two connectivity modes:**
-- **LAN (direct):** Kiosk calls Nexus API directly (`/queue/checkin`, `/fra/checkin`) — faster, no bridge table needed.
-- **External (Supabase bridge):** Kiosk writes to `kiosk_checkins`, subscribes to Realtime, waits for Nexus to process (20s timeout + fallback poll).
-
-All Supabase API calls use the **Publishable key** for reads. The **Service Role key** is used for writes (bridge inserts, marking arrived). Never expose the service role key in client-side bundles.
-
-### Freshdesk
-- Integrated via **webhooks** (inbound), API (for fetching thread history), and **ticket replies** (outbound, e.g., interview scheduling notifications).
-- Freshdesk ticket threads are appended to `case_timeline` — they are never the source of truth for case status.
-- Status changes logged in `freshdesk_status_log`.
-- Freshdesk UI ticket links use `https://services.mwosingapore.online/a/tickets/[id]` (not the API domain).
-
-### Google Calendar
-- Google Calendar API via service account for MWO and OWWA calendars.
-- Read/write integration managed by `google-calendar` backend module.
-
-### Glide (Legacy)
-- Glide data will be migrated via **CSV export**.
-- Migration scripts must map Glide fields to `welfare_cases` and the `special_modules` JSONB field.
-- Migration is a one-time, Phase 4 operation. Do not build ongoing Glide sync.
+SKILLED_CV  = 30c55940-083c-434a-8212-e810f2fa37b2
+MDW_CV      = cc50f069-1dc6-48ac-9e04-dbaf2a28b839
+DH          = ff4eeaf1-0009-4664-b9d8-6ea48de0f745
+OWWA        = 23470e2d-397e-4a24-b3ee-f55ed3fec65c
+FRA         = 7b9257b9-b2b6-404c-b277-c585ef27ec34
+```
 
 ---
 
-## 9. Implementation Phases (Reference)
+## 5. Domain Logic Rules
 
-| Phase | Focus |
-|---|---|
-| 1 | Docker + PostgreSQL on Synology; 2FA Auth; RBAC user roles |
-| 2 | Supabase & Freshdesk bridges; Live Queue widget; QR scan logic |
-| 3 | OR +1 logic; Hot Folder monitoring; file-rename automation |
-| 4 | Glide CSV migration; JSONB case mapping; timeline unification |
-| 5 | SHA-256 engine; PDF QR overlay; Public Verification Portal |
+### 5.1 Timezone — SGT (UTC+8) — CRITICAL
+
+**All dates must be Singapore Time. Never use UTC.**
+
+```typescript
+// ✅ Correct
+function todaySGT(): string {
+  const now = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  return now.toISOString().split('T')[0];
+}
+
+// ❌ WRONG — gives yesterday between midnight and 8am SGT
+new Date().toISOString().split('T')[0]
+```
+
+### 5.2 Ref Code Format Detection
+
+```typescript
+function detectScanType(value: string): 'APPOINTMENT' | 'FRA' | 'UNKNOWN' {
+  // FRA: UUID format (36 chars with hyphens)
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))
+    return 'FRA';
+  // Appointment: 6-10 char alphanumeric uppercase
+  if (/^[A-Z0-9]{6,10}$/.test(value))
+    return 'APPOINTMENT';
+  // FRA: 20-30 char alphanumeric (non-UUID format)
+  if (/^[A-Z0-9]{20,30}$/i.test(value))
+    return 'FRA';
+  return 'UNKNOWN';
+}
+```
+
+### 5.3 Client Name Display
+
+Appointment data stores names in `ofw_fname`, `ofw_mname`, `ofw_lname`.
+
+```typescript
+// ✅ Always use this pattern
+const fullName = [ofw_fname, ofw_mname, ofw_lname].filter(Boolean).join(' ');
+
+// ❌ Never do this — breaks if mname is null
+const fullName = `${ofw_fname} ${ofw_mname} ${ofw_lname}`;
+```
+
+### 5.4 Appointment Field Access
+
+OFW fields are **dedicated top-level columns** on the `appointments` table:
+- `ofw_fname`, `ofw_lname`, `ofw_mname`
+- `ofw_gender`, `ofw_visa`, `ofw_position`, `ofw_trans`
+- `client_contact`, `p_name`
+
+**Do NOT read these from `client_data` JSONB.** The JSONB is legacy; top-level columns are authoritative.
+
+### 5.5 FRA Check-in Window
+
+FRA registrations can be checked in from appointments **up to 14 days old** (not just today). This is intentional — agencies sometimes check in for prior-date appointments.
+
+### 5.6 Duplicate Prevention
+
+Before every check-in, query `kiosk_checkins` for today's date + ref_code. If a match exists (status not FAILED), show the existing queue number instead of creating a duplicate.
+
+### 5.7 Priority System
+
+| Check-in Type | Priority | Effect |
+|---|---|---|
+| Appointment / FRA | 3 | Called first by Nexus backend |
+| Walk-in | 7 | Called after all priority-3 entries |
+
+Lower number = higher priority.
 
 ---
 
-## 10. What NOT to Do
+## 6. Security Rules
 
-- Do not suggest cloud database hosting for any client PII or documents.
-- Do not generate OR numbers using UUIDs, timestamps, or random values.
-- Do not write frontend code that fetches directly from Supabase for operational data — always go through the local backend API.
-- Do not skip audit log entries for document-sensitive operations.
-- Do not leave JSONB columns without a Zod runtime schema (a TypeScript interface alone is not sufficient).
-- Do not generate UPDATE or DELETE statements targeting hash records or audit logs.
-- Do not use `localStorage` or client-side state as the source of truth for OR numbers or case status.
-- Do not use `any`. Ever. Use `unknown` and narrow it.
-- Do not generate FastAPI or Python backend code — the backend is NestJS.
+### Keys & Secrets
+- **Anon key** — used for reads (appointments, services). Safe to be in renderer process via env vars.
+- **Service role key** — used for writes (kiosk_checkins INSERT, fra_registrations UPDATE). Stored in electron-store settings, accessed via `getSupabaseWriter()`.
+- Service role key must **never** be hardcoded in source code.
+- All keys come from `.env` (build-time defaults) or runtime settings (electron-store).
+
+### Kiosk Mode Lock
+When `mode === 'KIOSK'` and `rememberMode === true`:
+- Window is fullscreen
+- No menu bar, no address bar, no dev tools
+- Cannot navigate away from kiosk UI
+- Only `Ctrl+Shift+S` (settings) and `Ctrl+Shift+Q` (quit) work
+
+### Data Handling
+- This app does **not** store PII locally beyond the current session
+- electron-store persists only: mode, Supabase credentials, printer settings
+- No client data is cached between sessions
+- Thermal ticket prints contain: queue number, service type, client name, date/time
+
+---
+
+## 7. Frontend Rules
+
+- **React 19 + Tailwind CSS 3.4**, bundled with **Vite 6**
+- UI philosophy: **Speed and clarity for 1-second interactions.** Every check-in should complete in under 3 seconds.
+- Dark mode via CSS `.dark` class on `<html>`, managed by `ModeContext`
+- Do not add animation libraries or heavy dependencies — this runs on office hardware
+- Large, high-contrast text for kiosk mode (readable from 2 meters)
+- Touch-friendly targets (min 48px) for kiosk/tablet use
+
+### State Management
+- **ModeContext** is the single global state provider
+- Contains: `mode`, `settings`, `loading`, `settingsOpen`
+- Mode changes recreate the Electron window (via IPC `switchMode`)
+- Settings updates persist immediately via electron-store
+
+### Component Patterns
+- `ScannerInput` — captures HID barcode scanner input (keyboard emulation → Enter triggers callback)
+- `useIdleTimer(ms, callback, enabled)` — auto-reset screens after inactivity (60s default in kiosk)
+- `useScanner()` — low-level keyboard input hook for barcode detection
+- `StatusBanner` — real-time Supabase connectivity indicator
+
+---
+
+## 8. Thermal Printing
+
+### Ticket Format (80mm)
+```
+    ┌──────────────────────────┐
+    │   MIGRANT WORKERS OFFICE │
+    │        SINGAPORE         │
+    │ ── ── ── ── ── ── ── ── │
+    │                          │
+    │         6001             │  ← 56pt bold monospace
+    │                          │
+    │      SKILLED CV          │  ← 11pt bold
+    │    JUAN DELA CRUZ        │  ← 10pt semibold
+    │ ── ── ── ── ── ── ── ── │
+    │   31 Mar 2026  09:15     │  ← 9pt
+    │                          │
+    │ Please wait for your     │  ← 8pt
+    │ number to be called.     │
+    └──────────────────────────┘
+```
+
+- Supported widths: 58mm (narrow) and 80mm (standard)
+- Printing via Electron IPC → system printer API
+- Auto-print toggle available in receptionist mode
+- Kiosk mode always auto-prints on success
+
+---
+
+## 9. Compatibility with Nexus Backend
+
+This app writes to Supabase. The Nexus backend reads from Supabase. They never communicate directly.
+
+```
+┌── Nexus Kiosk ────┐     ┌── Supabase ──────┐     ┌── Nexus Backend ──┐
+│  Check-in app      │────▶│  kiosk_checkins   │◀────│  Queue processing │
+│  (Internet LAN)    │     │  appointments     │     │  (Office LAN)     │
+│                    │     │  fra_registrations │     │                   │
+└────────────────────┘     └───────────────────┘     └───────────────────┘
+```
+
+### Compatibility Rules
+- **Full ref_code storage** — always store the complete value. Never truncate. The Nexus backend uses prefix matching as a fallback, but this app should always provide the full value.
+- **Queue numbers from RPC** — never calculate locally. The RPC ensures consistency across all apps.
+- **SGT dates** — `queue_date` must always be SGT. Nexus filters by this date.
+- **Status conventions** — receptionist mode writes `WAITING` (complete entry). Kiosk mode can write `PENDING` if it cannot resolve the service.
+- **Priority values** — must match: 3 for appointments/FRA, 7 for walk-ins.
+- **Display number format** — must use `formatQueueDisplay()` from `lib/constants.ts`.
+
+### What Nexus Expects From Each Check-in
+See AUDIT.md Section 4 for the exact column spec of `kiosk_checkins` rows.
+
+---
+
+## 10. Future: No-Receptionist System
+
+The long-term goal is to eliminate the receptionist role entirely. Design decisions should support this trajectory:
+
+### Current Barriers
+1. **Walk-ins** — Currently require receptionist to enter name/service type manually
+2. **Error recovery** — When QR scan fails, client needs human help
+3. **FRA check-in** — Agencies may need guidance; currently staff-assisted
+4. **Crowd management** — Receptionist currently manages the waiting area flow
+
+### Design Principles for No-Receptionist
+- Every error screen should have a clear self-service recovery path
+- On-screen keyboard for walk-in self-registration (already implemented)
+- Phone number lookup as fallback when QR fails
+- Clear visual/audio cues for each step (scan → processing → success/error)
+- Consider: pre-registration via web/SMS where client gets QR before arriving
+- Consider: real-time waiting area count display to manage crowd expectations
+
+---
+
+## 11. Off-Limits Folders and Files
+
+Claude must never read, edit, delete, move, or reference:
+
+**Folders:** `/secrets/`, `/config/private/`, `/.env*`, `/credentials/`, `/private/`, `/logs/`, `/backups/`, `/.ssh/`, `/.aws/`, `/.gcp/`
+
+**Files:** `*.pem`, `*.key`, `*.pfx`, `secrets.json`, `credentials.json`, `service-account.json`, `*.secret`
+
+### Behavior
+- Do not read restricted files, even to summarize
+- Do not infer secrets from context or variable names
+- Do not write secrets into any file or output
+- If a task requires a restricted path, stop and ask
+
+---
+
+## 12. Cross-Project Read Access
+
+### AgencyHire (`c:\dbmwosg\agencyhire`)
+May **read** for cross-reference only. Key files:
+- `lib/supabase/types.ts` — Appointment, FraRegistration type definitions
+- `lib/appointments/validations.ts` — Booking rules, status transitions
+- `lib/timezone.ts` — SGT timezone handling
+
+**Not allowed:** Edit, create, or delete any file in AgencyHire.
+
+### Nexus (`c:\dbmwosg\nexus`)
+May **read** to verify integration contracts. Key areas:
+- `apps/backend/src/modules/kiosk-bridge/` — How Nexus processes kiosk check-ins
+- `apps/backend/src/modules/queue/` — Queue status transitions
+- `apps/backend/src/modules/fra/` — FRA processing workflow
+- `apps/backend/src/modules/supabase/` — Supabase client and operations
+
+**Not allowed:** Edit any file in the Nexus monorepo from this workspace.
+
+---
+
+## 13. What NOT to Do
+
+- Do not generate NestJS, Express, FastAPI, or any backend framework code — this is an Electron app
+- Do not reference Prisma, local PostgreSQL, or `@nexus/database` — this app has no local DB
+- Do not generate queue numbers locally — always use the Supabase RPC
+- Do not truncate ref_code or transaction_ref values
+- Do not use UTC dates for queue_date — always SGT
+- Do not store PII in electron-store or localStorage
+- Do not hardcode Supabase keys in source code
+- Do not use `any` — use `unknown` and narrow with Zod
+- Do not skip the duplicate check before inserting a queue entry
+- Do not bypass the kiosk lock in production builds
+- Do not add walk-in registration to kiosk mode (no physical keyboard)
+- Do not import from `@nexus/types` or `@nexus/database` — this project is standalone, not part of the monorepo

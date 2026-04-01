@@ -7,7 +7,8 @@ interface StoreSchema {
   supabaseAnonKey: string;
   supabaseServiceKey: string;
   printerName: string;
-  paperWidth: '58mm' | '80mm';
+  paperWidth: '80mm';
+  autoPrint: boolean;
 }
 
 export const settingsStore = new Store<StoreSchema>({
@@ -20,5 +21,6 @@ export const settingsStore = new Store<StoreSchema>({
     supabaseServiceKey: '',
     printerName: '',
     paperWidth: '80mm',
+    autoPrint: true,
   },
 });

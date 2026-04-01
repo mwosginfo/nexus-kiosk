@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1920, height=1080, initial-scale=1.0">
+  <title>MWO Queue Display — Enhanced</title>
+  <style>
+    /* ═══════════════════════════════════════════════════
+       RESET & BASE
+       ═══════════════════════════════════════════════════ */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --color-bg: #0B1628;
+      --color-header: #132B52;
+      --color-card-bg: #FFFFFF;
+      --color-card-border: #E2E8F0;
+      --color-accent-blue: #2563EB;
+      --color-accent-red: #DC2626;
+      --color-accent-green: #059669;
+      --color-accent-amber: #D97706;
+      --color-accent-purple: #7C3AED;
+      --color-text-primary: #F8FAFC;
+      --color-text-muted: #94A3B8;
+      --color-text-dark: #1E293B;
+      --color-text-subtle: #64748B;
+      --color-divider: #1E3A5F;
+      --color-pulse-red: #EF4444;
+      --color-pulse-glow: rgba(239, 68, 68, 0.25);
+      --color-counter-bg: #F1F5F9;
+      --color-next-bg: rgba(255,255,255,0.04);
+      --color-stats-bg: rgba(255,255,255,0.06);
+    }
+
+    html, body {
+      width: 1920px;
+      height: 1080px;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--color-bg);
+      color: var(--color-text-primary);
+      overflow: hidden;
+    }
+
+    /* ═══════════════════════════════════════════════════
+       LAYOUT — 1920×1080 TV Display
+       ═══════════════════════════════════════════════════ */
+    .display-container {
+      display: grid;
+      grid-template-rows: auto 1fr auto auto auto;
+      height: 100vh;
+      padding: 20px 28px;
+      gap: 16px;
+    }
+
+    /* ═══════════════════════════════════════════════════
+       HEADER
+       ═══════════════════════════════════════════════════ */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--color-header);
+      border-radius: 12px;
+      padding: 16px 28px;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .header-logo {
+      width: 52px;
+      height: 52px;
+      background: var(--color-accent-blue);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 18px;
+      color: white;
+      letter-spacing: -0.5px;
+    }
+
+    .header-title {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+
+    .header-subtitle {
+      font-size: 13px;
+      color: var(--color-text-muted);
+      margin-top: 1px;
+    }
+
+    .header-right {
+      text-align: right;
+    }
+
+    .header-date {
+      font-size: 15px;
+      color: var(--color-text-muted);
+    }
+
+    .header-time {
+      font-size: 32px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 1px;
+    }
+
+    /* ═══════════════════════════════════════════════════
+       NOW SERVING — Counter Cards
+       ═══════════════════════════════════════════════════ */
+    .section-label {
+      font-size: 14px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--color-text-muted);
+      margin-bottom: -8px;
+    }
+
+    .counters-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }
+
+    .counter-card {
+      background: var(--color-card-bg);
+      border-radius: 14px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      position: relative;
+      overflow: hidden;
+      transition: box-shadow 0.3s ease;
+    }
+
+    .counter-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+    }
+
+    .counter-card.status-called::before { background: var(--color-accent-red); }
+    .counter-card.status-processing::before { background: var(--color-accent-blue); }
+    .counter-card.status-idle::before { background: #CBD5E1; }
+
+    /* Pulsing glow for CALLED */
+    .counter-card.status-called {
+      animation: pulse-glow 1.5s ease-in-out infinite;
+      box-shadow: 0 0 20px var(--color-pulse-glow);
+    }
+
+    @keyframes pulse-glow {
+      0%, 100% { box-shadow: 0 0 15px var(--color-pulse-glow); }
+      50% { box-shadow: 0 0 35px var(--color-pulse-glow), 0 0 60px rgba(239, 68, 68, 0.1); }
+    }
+
+    .counter-label {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--color-text-subtle);
+      margin-bottom: 6px;
+    }
+
+    .counter-number {
+      font-size: 72px;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -2px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .counter-card.status-called .counter-number { color: var(--color-accent-red); }
+    .counter-card.status-processing .counter-number { color: var(--color-text-dark); }
+    .counter-card.status-idle .counter-number { color: #CBD5E1; }
+
+    .counter-service {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-top: 6px;
+      padding: 3px 10px;
+      border-radius: 4px;
+      background: #F1F5F9;
+    }
+
+    .counter-service.type-cv { color: #1D4ED8; }
+    .counter-service.type-fra { color: #7C3AED; }
+    .counter-service.type-owwa { color: #059669; }
+    .counter-service.type-dh { color: #B45309; }
+
+    .counter-client {
+      font-size: 14px;
+      color: var(--color-text-subtle);
+      margin-top: 4px;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .counter-status-badge {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    .counter-status-badge.called {
+      background: #FEE2E2;
+      color: #DC2626;
+    }
+
+    .counter-status-badge.processing {
+      background: #DBEAFE;
+      color: #2563EB;
+    }
+
+    /* ═══════════════════════════════════════════════════
+       NEXT UP BAR
+       ═══════════════════════════════════════════════════ */
+    .next-up-bar {
+      background: var(--color-next-bg);
+      border: 1px solid var(--color-divider);
+      border-radius: 10px;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .next-up-label {
+      font-size: 14px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--color-text-muted);
+      white-space: nowrap;
+    }
+
+    .next-up-numbers {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .next-up-num {
+      font-size: 26px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      padding: 4px 14px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .next-up-num.series-regular { color: #60A5FA; }
+    .next-up-num.series-fra { color: #A78BFA; }
+    .next-up-num.series-owwa { color: #34D399; }
+    .next-up-num.series-walkin { color: #FBBF24; }
+
+    .next-up-arrow {
+      color: var(--color-text-muted);
+      font-size: 18px;
+    }
+
+    /* ═══════════════════════════════════════════════════
+       STATS BAR
+       ═══════════════════════════════════════════════════ */
+    .stats-bar {
+      background: var(--color-stats-bg);
+      border: 1px solid var(--color-divider);
+      border-radius: 10px;
+      padding: 14px 28px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .stats-group {
+      display: flex;
+      gap: 40px;
+    }
+
+    .stat-item {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .stat-value {
+      font-size: 30px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stat-value.waiting { color: #FBBF24; }
+    .stat-value.avgwait { color: #60A5FA; }
+    .stat-value.served { color: #34D399; }
+
+    .stat-label {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .stat-unit {
+      font-size: 16px;
+      color: var(--color-text-muted);
+      font-weight: 500;
+    }
+
+    /* EWT breakdown */
+    .ewt-breakdown {
+      display: flex;
+      gap: 24px;
+    }
+
+    .ewt-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--color-text-muted);
+    }
+
+    .ewt-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .ewt-dot.cv { background: #60A5FA; }
+    .ewt-dot.fra { background: #A78BFA; }
+    .ewt-dot.owwa { background: #34D399; }
+
+    .ewt-time {
+      font-weight: 700;
+      color: var(--color-text-primary);
+    }
+
+    /* ═══════════════════════════════════════════════════
+       INFO BANNER
+       ═══════════════════════════════════════════════════ */
+    .info-banner {
+      background: linear-gradient(135deg, #132B52 0%, #1E3A5F 100%);
+      border-radius: 10px;
+      padding: 12px 28px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 15px;
+      color: #CBD5E1;
+    }
+
+    .info-icon {
+      font-size: 18px;
+      color: #60A5FA;
+      flex-shrink: 0;
+    }
+
+    .info-text {
+      flex: 1;
+    }
+
+    .info-text strong {
+      color: #F8FAFC;
+    }
+
+    /* ═══════════════════════════════════════════════════
+       ANIMATIONS
+       ═══════════════════════════════════════════════════ */
+    @keyframes fade-in {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .counter-card {
+      animation: fade-in 0.4s ease-out;
+    }
+
+    /* ═══════════════════════════════════════════════════
+       RESPONSIVE — Scales for different TV sizes
+       ═══════════════════════════════════════════════════ */
+    @media (max-width: 1600px) {
+      .counter-number { font-size: 60px; }
+      .counters-grid { gap: 12px; }
+    }
+
+    @media (max-width: 1280px) {
+      .counter-number { font-size: 48px; }
+      .counters-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+
+<div class="display-container">
+
+  <!-- ══════════ HEADER ══════════ -->
+  <div class="header">
+    <div class="header-left">
+      <div class="header-logo">MWO</div>
+      <div>
+        <div class="header-title">MWO &mdash; OWWA QUEUE</div>
+        <div class="header-subtitle">Migrant Workers Office &bull; Singapore</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="header-date">Monday, 31 March 2026</div>
+      <div class="header-time" id="clock">09:42:15 AM</div>
+    </div>
+  </div>
+
+  <!-- ══════════ NOW SERVING — Counter Cards ══════════ -->
+  <div>
+    <div class="section-label" style="margin-bottom: 10px;">Now Serving</div>
+    <div class="counters-grid">
+
+      <!-- Window 1 — CALLED (pulsing) -->
+      <div class="counter-card status-called">
+        <span class="counter-status-badge called">CALLED</span>
+        <div class="counter-label">Window 1</div>
+        <div class="counter-number">6023</div>
+        <div class="counter-service type-cv">Skilled CV</div>
+        <div class="counter-client">DELA CRUZ, Juan M.</div>
+      </div>
+
+      <!-- Window 2 — PROCESSING (solid) -->
+      <div class="counter-card status-processing">
+        <span class="counter-status-badge processing">Processing</span>
+        <div class="counter-label">Window 2</div>
+        <div class="counter-number">6021</div>
+        <div class="counter-service type-cv">MDW CV</div>
+        <div class="counter-client">SANTOS, Maria L.</div>
+      </div>
+
+      <!-- Window 3 — CALLED (pulsing) -->
+      <div class="counter-card status-called">
+        <span class="counter-status-badge called">CALLED</span>
+        <div class="counter-label">Window 3</div>
+        <div class="counter-number">A005</div>
+        <div class="counter-service type-fra">FRA</div>
+        <div class="counter-client">ABC Manpower Agency</div>
+      </div>
+
+      <!-- Window 4 — PROCESSING -->
+      <div class="counter-card status-processing">
+        <span class="counter-status-badge processing">Processing</span>
+        <div class="counter-label">Window 4</div>
+        <div class="counter-number">6019</div>
+        <div class="counter-service type-dh">Direct Hire</div>
+        <div class="counter-client">REYES, Antonio B.</div>
+      </div>
+
+      <!-- Window 5 — PROCESSING -->
+      <div class="counter-card status-processing">
+        <span class="counter-status-badge processing">Processing</span>
+        <div class="counter-label">Window 5</div>
+        <div class="counter-number">6020</div>
+        <div class="counter-service type-cv">Skilled CV</div>
+        <div class="counter-client">GARCIA, Roberto P.</div>
+      </div>
+
+      <!-- OWWA Window — CALLED (pulsing) -->
+      <div class="counter-card status-called">
+        <span class="counter-status-badge called">CALLED</span>
+        <div class="counter-label">OWWA</div>
+        <div class="counter-number">9008</div>
+        <div class="counter-service type-owwa">OWWA</div>
+        <div class="counter-client">VILLANUEVA, Rosa A.</div>
+      </div>
+
+      <!-- Window 6 — Idle -->
+      <div class="counter-card status-idle">
+        <div class="counter-label">Window 6</div>
+        <div class="counter-number">&mdash;</div>
+        <div class="counter-service" style="color: #94A3B8;">Available</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══════════ NEXT UP ══════════ -->
+  <div class="next-up-bar">
+    <div class="next-up-label">Next Up</div>
+    <div class="next-up-numbers">
+      <span class="next-up-num series-regular">6024</span>
+      <span class="next-up-arrow">&rarr;</span>
+      <span class="next-up-num series-regular">6025</span>
+      <span class="next-up-arrow">&rarr;</span>
+      <span class="next-up-num series-regular">6026</span>
+      <span class="next-up-arrow">&rarr;</span>
+      <span class="next-up-num series-fra">A006</span>
+      <span class="next-up-arrow">&rarr;</span>
+      <span class="next-up-num series-owwa">9009</span>
+      <span class="next-up-arrow">&rarr;</span>
+      <span class="next-up-num series-walkin">W603</span>
+      <span class="next-up-arrow">&rarr;</span>
+      <span class="next-up-num series-regular">6027</span>
+    </div>
+  </div>
+
+  <!-- ══════════ STATS BAR ══════════ -->
+  <div class="stats-bar">
+    <div class="stats-group">
+      <div class="stat-item">
+        <span class="stat-value waiting">14</span>
+        <span class="stat-label">Waiting</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-value avgwait">~18</span>
+        <span class="stat-unit">min</span>
+        <span class="stat-label">Avg Wait</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-value served">53</span>
+        <span class="stat-label">Served Today</span>
+      </div>
+    </div>
+    <div class="ewt-breakdown">
+      <div class="ewt-item">
+        <span class="ewt-dot cv"></span>
+        CV: <span class="ewt-time">~15 min</span>
+      </div>
+      <div class="ewt-item">
+        <span class="ewt-dot fra"></span>
+        FRA: <span class="ewt-time">~22 min</span>
+      </div>
+      <div class="ewt-item">
+        <span class="ewt-dot owwa"></span>
+        OWWA: <span class="ewt-time">~8 min</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ INFO BANNER ══════════ -->
+  <div class="info-banner">
+    <span class="info-icon">&#9432;</span>
+    <span class="info-text">
+      <strong>Please have your documents ready</strong> before your number is called.
+      Appointment clients are served before walk-ins.
+    </span>
+  </div>
+
+</div>
+
+<!-- ══════════ LIVE CLOCK ══════════ -->
+<script>
+  function updateClock() {
+    const now = new Date(Date.now() + 8 * 60 * 60 * 1000); // SGT
+    const h = now.getUTCHours();
+    const m = String(now.getUTCMinutes()).padStart(2, '0');
+    const s = String(now.getUTCSeconds()).padStart(2, '0');
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 || 12;
+    document.getElementById('clock').textContent = `${String(h12).padStart(2, '0')}:${m}:${s} ${ampm}`;
+  }
+  setInterval(updateClock, 1000);
+  updateClock();
+
+  // Simulate rotating info banners
+  const banners = [
+    '<strong>Please have your documents ready</strong> before your number is called. Appointment clients are served before walk-ins.',
+    '<strong>FRA agencies:</strong> Please ensure all worker documents are complete before your number is called.',
+    '<strong>Need help?</strong> Please approach Window 1 for assistance.',
+    '<strong>OWWA services:</strong> Please proceed directly to the OWWA counter when your number is called.',
+  ];
+  let bannerIndex = 0;
+  setInterval(() => {
+    bannerIndex = (bannerIndex + 1) % banners.length;
+    document.querySelector('.info-text').innerHTML = banners[bannerIndex];
+  }, 10000);
+</script>
+
+</body>
+</html>

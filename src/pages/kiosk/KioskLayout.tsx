@@ -46,7 +46,7 @@ export function KioskLayout() {
         // ─── FRA flow ────────────────────────────────────────────────
         const fra = await fraService.lookupByRef(value);
         if (!fra) {
-          setErrorMsg('No FRA registration found for today.');
+          setErrorMsg('No FRA registration found within the last 14 days.');
           setScreen('ERROR');
           return;
         }
@@ -136,6 +136,9 @@ export function KioskLayout() {
           transactionRef: appt.ref_code,
         });
 
+        // Mark appointment as arrived (fire-and-forget)
+        appointmentService.markArrived(appt.id).catch(() => {});
+
         const serviceLabel = resolveServiceLabel(appt.service_id);
 
         const checkinResult: CheckinResult = {
@@ -155,7 +158,10 @@ export function KioskLayout() {
       }
     } catch (err) {
       console.error('[KioskLayout] Checkin error:', err);
-      setErrorMsg(err instanceof Error ? err.message : 'Check-in failed. Please try again.');
+      const raw = err instanceof Error ? err.message : 'Check-in failed. Please try again.';
+      // Friendly network error messages
+      const isNetworkError = raw.includes('Failed to fetch') || raw.includes('NetworkError') || raw.includes('ERR_NAME');
+      setErrorMsg(isNetworkError ? 'Cannot connect to server. Please check network connection.' : raw);
       setScreen('ERROR');
     } finally {
       setLoading(false);

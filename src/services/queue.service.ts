@@ -3,10 +3,41 @@
  *
  * Uses next_queue_number() RPC with pg_advisory_xact_lock for safe concurrency.
  * Queue numbers reset daily (SGT).
+ *
+ * Status convention:
+ *   This app always writes status='WAITING' because it fully resolves
+ *   the service, generates the queue number, and builds the complete entry.
+ *   The Nexus kiosk-bridge only processes PENDING entries (for simpler clients
+ *   that cannot resolve services). Since we do all that, WAITING is correct.
+ *
+ * Priority (matches Nexus addToQueue):
+ *   3 = APPOINTMENT / FRA (served first)
+ *   7 = WALKIN (served after appointments)
+ *   Supabase DEFAULT is 5. We always set explicitly.
  */
 
 import { getSupabaseWriter } from './supabase.client';
 import { todaySGT, formatQueueDisplay, getStartNumber, generateRefCode } from '../lib/constants';
+
+// ─── Rate Limiting ─────────────────────────────────────────────────────────
+
+const rateLimitState = {
+  timestamps: [] as number[],
+  maxRequests: 10,
+  windowMs: 60_000, // 1 minute
+};
+
+function checkRateLimit(): boolean {
+  const now = Date.now();
+  rateLimitState.timestamps = rateLimitState.timestamps.filter(
+    (t) => now - t < rateLimitState.windowMs,
+  );
+  if (rateLimitState.timestamps.length >= rateLimitState.maxRequests) {
+    return false;
+  }
+  rateLimitState.timestamps.push(now);
+  return true;
+}
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -33,20 +64,27 @@ export interface DuplicateResult {
   readonly isDuplicate: true;
   readonly displayNumber: string;
   readonly queueNumber: number;
+  readonly isDeferred: boolean;
 }
 
+/**
+ * Check for existing check-in today.
+ * Excludes FAILED entries (retryable) and DEFERRED entries (re-entry allowed).
+ * For non-same-day scans, no duplicate exists by definition (different queue_date).
+ */
 export async function checkDuplicate(
   refCode: string,
 ): Promise<DuplicateResult | null> {
   const supabase = getSupabaseWriter();
   const today = todaySGT();
 
+  // First check for active (non-terminal) entries today
   const { data, error } = await supabase
     .from('kiosk_checkins')
-    .select('id, queue_number, display_number')
+    .select('id, queue_number, display_number, status')
     .eq('ref_code', refCode)
     .eq('queue_date', today)
-    .neq('status', 'FAILED')
+    .not('status', 'in', '("FAILED","DEFERRED")')
     .limit(1)
     .maybeSingle();
 
@@ -55,14 +93,32 @@ export async function checkDuplicate(
     return null;
   }
 
-  if (!data) return null;
+  if (data) {
+    const row = data as Record<string, unknown>;
+    return {
+      isDuplicate: true,
+      displayNumber: row.display_number as string,
+      queueNumber: row.queue_number as number,
+      isDeferred: false,
+    };
+  }
 
-  const row = data as Record<string, unknown>;
-  return {
-    isDuplicate: true,
-    displayNumber: row.display_number as string,
-    queueNumber: row.queue_number as number,
-  };
+  // Check if there's a deferred entry — allow re-scan but inform caller
+  const { data: deferred } = await supabase
+    .from('kiosk_checkins')
+    .select('id, queue_number, display_number, status')
+    .eq('ref_code', refCode)
+    .eq('queue_date', today)
+    .eq('status', 'DEFERRED')
+    .limit(1)
+    .maybeSingle();
+
+  if (deferred) {
+    // Deferred entries are allowed to re-check-in (new queue number)
+    return null;
+  }
+
+  return null;
 }
 
 // ─── Queue number generation via RPC ───────────────────────────────────────
@@ -89,13 +145,22 @@ async function getNextQueueNumber(queueSeries: string): Promise<number> {
 /**
  * Generate a queue number and insert a row into kiosk_checkins.
  * Works for appointments, FRA, walk-ins, and OWWA quick queue.
+ *
+ * Priority and call_count are always set explicitly to match Nexus backend
+ * addToQueue() behavior. Status is always WAITING (see module header comment).
  */
 export async function checkinAndAssignQueue(data: CheckinData): Promise<QueueAssignment> {
+  if (!checkRateLimit()) {
+    throw new Error('Too many check-ins in a short time. Please wait a moment and try again.');
+  }
+
   const supabase = getSupabaseWriter();
   const today = todaySGT();
 
   const queueNumber = await getNextQueueNumber(data.queueSeries);
   const displayNumber = formatQueueDisplay(queueNumber, data.queueSeries);
+
+  const priority = data.appointmentType === 'WALKIN' ? 7 : 3;
 
   const { error } = await supabase
     .from('kiosk_checkins')
@@ -112,6 +177,8 @@ export async function checkinAndAssignQueue(data: CheckinData): Promise<QueueAss
       appointment_id: data.appointmentId ?? null,
       transaction_ref: data.transactionRef ?? data.refCode,
       queue_date: today,
+      priority,
+      call_count: 0,
     });
 
   if (error) throw new Error(`Check-in failed: ${error.message}`);
@@ -150,9 +217,13 @@ export interface WalkInData {
 
 /**
  * Register a walk-in client and assign a WALKIN_REGULAR queue number.
- * Writes directly to kiosk_checkins with W600 series.
+ * Walk-ins get priority 7 (lower than appointments at priority 3).
  */
 export async function walkInCheckin(data: WalkInData): Promise<QueueAssignment> {
+  if (!checkRateLimit()) {
+    throw new Error('Too many check-ins in a short time. Please wait a moment and try again.');
+  }
+
   const refCode = `W-${generateRefCode()}`;
   const clientName = [data.fname, data.mname, data.lname].filter(Boolean).join(' ');
 
@@ -177,6 +248,8 @@ export async function walkInCheckin(data: WalkInData): Promise<QueueAssignment> 
       appointment_id: null,
       transaction_ref: refCode,
       queue_date: today,
+      priority: 7,
+      call_count: 0,
     });
 
   if (error) throw new Error(`Walk-in check-in failed: ${error.message}`);

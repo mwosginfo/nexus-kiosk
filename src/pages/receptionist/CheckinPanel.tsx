@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { QueueNumberDisplay } from '../../components/QueueNumberDisplay';
-import { resolveServiceLabel } from '../../lib/constants';
+import { resolveServiceLabel, todaySGT } from '../../lib/constants';
 import * as appointmentService from '../../services/appointment.service';
 import * as fraService from '../../services/fra.service';
 import * as queueService from '../../services/queue.service';
@@ -15,9 +15,10 @@ interface CheckinPanelProps {
   readonly selected: SelectedItem | null;
   readonly lastCheckin: { queueNumber: string; name: string } | null;
   readonly onCheckinComplete: (queueNumber: string, name: string) => void;
+  readonly autoPrint: boolean;
 }
 
-export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: CheckinPanelProps) {
+export function CheckinPanel({ selected, lastCheckin, onCheckinComplete, autoPrint }: CheckinPanelProps) {
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState('');
 
@@ -29,6 +30,14 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: Check
     try {
       if (selected.type === 'appointment') {
         const appt = selected.data;
+
+        // Validate status + date (P2: receptionist should also validate)
+        const validation = appointmentService.validateAppointment(appt);
+        if (!validation.ok) {
+          setError(validation.message);
+          setChecking(false);
+          return;
+        }
 
         // Check duplicate
         const dup = await queueService.checkDuplicate(appt.ref_code);
@@ -58,16 +67,36 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: Check
           transactionRef: appt.ref_code,
         });
 
+        // Mark appointment as arrived (fire-and-forget)
+        appointmentService.markArrived(appt.id).catch(() => {});
+
         onCheckinComplete(assignment.displayNumber, name);
 
-        // Print in background
-        window.electronAPI.printTicket({
-          queueNumber: assignment.displayNumber,
-          clientName: name,
-          serviceType: serviceLabel,
-        }).catch((err: unknown) => console.error('[CheckinPanel] Print error:', err));
+        // Print in background (if auto-print enabled)
+        if (autoPrint) {
+          window.electronAPI.printTicket({
+            queueNumber: assignment.displayNumber,
+            clientName: name,
+            serviceType: serviceLabel,
+          }).catch((err: unknown) => console.error('[CheckinPanel] Print error:', err));
+        }
       } else {
         const fra = selected.data;
+
+        // Validate FRA status (P2: receptionist should also validate)
+        if (fra.status === 'completed' || fra.status === 'cancelled') {
+          setError(`This FRA registration is ${fra.status} and cannot be checked in.`);
+          setChecking(false);
+          return;
+        }
+
+        // Validate FRA date (past 14 days only)
+        const today = todaySGT();
+        if (fra.appointment_date && fra.appointment_date > today) {
+          setError(`FRA appointment is for ${fra.appointment_date}, which is in the future.`);
+          setChecking(false);
+          return;
+        }
 
         // Check duplicate
         const dup = await queueService.checkDuplicate(fra.transaction_ref);
@@ -92,15 +121,19 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: Check
 
         onCheckinComplete(assignment.displayNumber, fra.fra);
 
-        // Print in background
-        window.electronAPI.printTicket({
-          queueNumber: assignment.displayNumber,
-          clientName: fra.fra,
-          serviceType: 'FRA Registration',
-        }).catch((err: unknown) => console.error('[CheckinPanel] Print error:', err));
+        // Print in background (if auto-print enabled)
+        if (autoPrint) {
+          window.electronAPI.printTicket({
+            queueNumber: assignment.displayNumber,
+            clientName: fra.fra,
+            serviceType: 'FRA Registration',
+          }).catch((err: unknown) => console.error('[CheckinPanel] Print error:', err));
+        }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Check-in failed');
+      const raw = err instanceof Error ? err.message : 'Check-in failed';
+      const isNetworkError = raw.includes('Failed to fetch') || raw.includes('NetworkError');
+      setError(isNetworkError ? 'Cannot connect to server. Please check network connection.' : raw);
     } finally {
       setChecking(false);
     }
@@ -149,9 +182,25 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: Check
     const name = [a.ofw_fname, a.ofw_mname, a.ofw_lname].filter(Boolean).join(' ');
     const serviceLabel = a.services?.name ?? resolveServiceLabel(a.service_id);
 
+    // Visual warning for non-today or non-active appointments
+    const isNotToday = a.appointment_date !== todaySGT();
+    const isTerminal = ['cancelled', 'completed', 'no_show'].includes(a.status);
+
     return (
       <div className="space-y-6">
         <h2 className="text-xl font-bold text-gray-800">Appointment Details</h2>
+
+        {isNotToday && (
+          <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+            This appointment is for <strong>{a.appointment_date}</strong>, not today.
+          </div>
+        )}
+
+        {isTerminal && (
+          <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+            This appointment is <strong>{a.status}</strong> and cannot be checked in.
+          </div>
+        )}
 
         <div className="bg-white rounded-xl border p-6 space-y-4">
           <div className="grid grid-cols-2 gap-4">
@@ -188,7 +237,7 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: Check
 
         <button
           onClick={() => void handleCheckin()}
-          disabled={checking}
+          disabled={checking || isTerminal}
           className="w-full py-4 text-lg font-bold text-white bg-teal-500 rounded-xl hover:bg-teal-600 disabled:opacity-50 transition-colors"
         >
           {checking ? 'Checking In...' : 'Check In & Print Ticket'}
@@ -199,10 +248,17 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: Check
 
   // Selected FRA detail
   const f = selected.data;
+  const isTerminalFra = f.status === 'completed' || f.status === 'cancelled';
 
   return (
     <div className="space-y-6">
       <h2 className="text-xl font-bold text-gray-800">FRA Registration Details</h2>
+
+      {isTerminalFra && (
+        <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+          This FRA registration is <strong>{f.status}</strong> and cannot be checked in.
+        </div>
+      )}
 
       <div className="bg-white rounded-xl border p-6 space-y-4">
         <div className="grid grid-cols-2 gap-4">
@@ -226,6 +282,10 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: Check
             <p className="text-xs text-gray-400 uppercase">Status</p>
             <p className="text-gray-700">{f.status}</p>
           </div>
+          <div>
+            <p className="text-xs text-gray-400 uppercase">Appointment Date</p>
+            <p className="text-gray-700">{f.appointment_date ?? 'N/A'}</p>
+          </div>
         </div>
       </div>
 
@@ -235,7 +295,7 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete }: Check
 
       <button
         onClick={() => void handleCheckin()}
-        disabled={checking}
+        disabled={checking || isTerminalFra}
         className="w-full py-4 text-lg font-bold text-white bg-blue-500 rounded-xl hover:bg-blue-600 disabled:opacity-50 transition-colors"
       >
         {checking ? 'Checking In...' : 'Check In & Print Ticket'}

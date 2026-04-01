@@ -1,5 +1,5 @@
 /**
- * Appointment Service — lookups only. This app does NOT modify appointments.
+ * Appointment Service — lookups + mark arrived on check-in.
  */
 
 import { getSupabaseWriter } from './supabase.client';
@@ -124,6 +124,25 @@ export function validateAppointment(appointment: AppointmentWithService): Checki
   }
 
   return { ok: true };
+}
+
+// ─── Mark arrived (fire-and-forget, non-fatal) ─────────────────────────────
+
+/**
+ * Update appt_status to 'ARRIVED' after successful check-in.
+ * Uses the same column Nexus backend uses (appt_status, not status).
+ * Fire-and-forget — check-in succeeds even if this update fails.
+ */
+export async function markArrived(appointmentId: string): Promise<void> {
+  const supabase = getSupabaseWriter();
+  const { error } = await supabase
+    .from('appointments')
+    .update({ appt_status: 'ARRIVED' })
+    .eq('id', appointmentId);
+
+  if (error) {
+    console.warn('[appointment.markArrived] Error (non-fatal):', error.message);
+  }
 }
 
 // ─── Service slug lookup ───────────────────────────────────────────────────
