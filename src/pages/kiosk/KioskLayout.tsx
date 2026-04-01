@@ -76,7 +76,7 @@ export function KioskLayout() {
         });
 
         // Mark FRA as arrived (fire-and-forget)
-        fraService.markArrived(fra.id).catch(() => {});
+        fraService.markArrived(fra.transaction_ref).catch(() => {});
 
         const checkinResult: CheckinResult = {
           queueNumber: assignment.displayNumber,

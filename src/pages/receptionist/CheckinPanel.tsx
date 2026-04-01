@@ -117,7 +117,7 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete, autoPri
         });
 
         // Mark arrived (fire-and-forget)
-        fraService.markArrived(fra.id).catch(() => {});
+        fraService.markArrived(fra.transaction_ref).catch(() => {});
 
         onCheckinComplete(assignment.displayNumber, fra.fra);
 

@@ -60,16 +60,21 @@ export async function lookupByRef(
   return data as FraRegistrationRow | null;
 }
 
-/** Mark FRA registration as arrived (fire-and-forget, non-fatal) */
-export async function markArrived(fraId: string): Promise<void> {
-  const supabase = getSupabaseWriter(); // WRITE: service role key
+/**
+ * Mark ALL pending FRA contracts in a batch as arrived.
+ * Updates by transaction_ref (not individual id) to match Nexus behavior.
+ * Fire-and-forget — check-in succeeds even if this update fails.
+ */
+export async function markArrived(transactionRef: string): Promise<void> {
+  const supabase = getSupabaseWriter();
   const { error } = await supabase
     .from('fra_registrations')
     .update({
       status: 'arrived',
       arrived_at: new Date().toISOString(),
     })
-    .eq('id', fraId);
+    .eq('transaction_ref', transactionRef)
+    .eq('status', 'pending');
 
   if (error) {
     console.warn('[fra.markArrived] Error (non-fatal):', error.message);
