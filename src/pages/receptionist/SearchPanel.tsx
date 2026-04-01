@@ -4,7 +4,7 @@ import { DatePicker } from '../../components/DatePicker';
 import { AppointmentCard } from '../../components/AppointmentCard';
 import { FraCard } from '../../components/FraCard';
 import { useScanner } from '../../hooks/useScanner';
-import { todaySGT, UUID_REGEX } from '../../lib/constants';
+import { todaySGT, detectScanType } from '../../lib/constants';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faUsers, faBuilding, faCalendarDay } from '@fortawesome/free-solid-svg-icons';
 import * as appointmentService from '../../services/appointment.service';
@@ -99,11 +99,11 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
     }
   }
 
-  // QR scanner — auto-detect FRA (UUID) vs regular
+  // QR scanner — auto-detect FRA (UUID or long alphanumeric) vs regular appointment
   useScanner({
     onScan: (scanned) => {
-      const isFra = UUID_REGEX.test(scanned);
-      const forceTab: SearchTab = isFra ? 'fra' : 'regular';
+      const scanType = detectScanType(scanned);
+      const forceTab: SearchTab = scanType === 'FRA' ? 'fra' : 'regular';
       setSearchValue(scanned);
       setTab(forceTab);
       setSearchMode('ref_code');

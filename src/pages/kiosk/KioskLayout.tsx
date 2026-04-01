@@ -189,7 +189,8 @@ export function KioskLayout() {
   useScanner({
     onScan: (scanned) => {
       if (screen === 'SPLASH') return;
-      const type = UUID_REGEX.test(scanned) ? 'fra' : appointmentType;
+      const scanType = detectScanType(scanned);
+      const type: AppointmentType = scanType === 'FRA' ? 'fra' : appointmentType;
       void doCheckin(scanned, type);
     },
     enabled: screen !== 'SPLASH' && screen !== 'SUCCESS' && screen !== 'ERROR',
