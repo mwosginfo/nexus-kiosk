@@ -460,19 +460,179 @@ If you want the kiosk-bridge to process entries from this kiosk (e.g., for centr
 
 ---
 
-## 17. Known Issues & Integration Notes
+## 17. Bug Report — Nexus Backend Fixes Required
+
+> **Reported:** 2026-04-01 | **Verified against:** Nexus backend source code
+> These bugs exist in the Nexus backend, NOT in the kiosk app.
+
+---
+
+### BUG-1: call_count not reset on reactivation (HIGH)
+
+**Impact:** A client who was called 2+ times before being deferred will be auto-missed on their very first call after re-entry. The auto-miss threshold is `call_count > 3`, but the old count carries over.
+
+**Affected code paths (3 locations):**
+
+**Location 1:** `apps/backend/src/modules/queue/queue.service.ts` — `reactivateDeferred()` (~line 460-470)
+```typescript
+// CURRENT (BROKEN) — call_count not included in update
+const updated = await this.supabaseService.updateQueueEntry(queueId, {
+  status: 'WAITING',
+  queue_date: today,
+  queue_number: nextNumber,
+  display_number: formatQueueDisplay(nextNumber, series),
+  completed_at: null,
+  called_at: null,
+  assigned_to: null,
+  counter_number: null,
+  deferral_reason: null,
+});
+
+// FIX — add call_count: 0
+const updated = await this.supabaseService.updateQueueEntry(queueId, {
+  status: 'WAITING',
+  queue_date: today,
+  queue_number: nextNumber,
+  display_number: formatQueueDisplay(nextNumber, series),
+  completed_at: null,
+  called_at: null,
+  assigned_to: null,
+  counter_number: null,
+  deferral_reason: null,
+  call_count: 0,              // ← ADD THIS
+});
+```
+
+**Location 2:** `apps/backend/src/modules/queue/queue.service.ts` — `reenterDeferred()` (~line 617-627)
+```typescript
+// CURRENT (BROKEN)
+await this.supabaseService.updateQueueEntry(existing.id, {
+  status: 'WAITING',
+  queue_date: today,
+  queue_number: nextNumber,
+  display_number: formatQueueDisplay(nextNumber, series),
+  called_at: null,
+  completed_at: null,
+  assigned_to: null,
+  counter_number: null,
+  remarks: `Returned (deferred) by ${staffUsername}`,
+});
+
+// FIX — add call_count: 0
+await this.supabaseService.updateQueueEntry(existing.id, {
+  status: 'WAITING',
+  queue_date: today,
+  queue_number: nextNumber,
+  display_number: formatQueueDisplay(nextNumber, series),
+  called_at: null,
+  completed_at: null,
+  assigned_to: null,
+  counter_number: null,
+  remarks: `Returned (deferred) by ${staffUsername}`,
+  call_count: 0,              // ← ADD THIS
+});
+```
+
+**Location 3:** `apps/backend/src/modules/fra/fra.service.ts` — `checkInFra()` deferred return (~line 256-266)
+```typescript
+// CURRENT (BROKEN)
+await this.supabaseService.updateQueueEntry(deferredFra.id, {
+  status: 'WAITING',
+  queue_number: nextNumber,
+  display_number: displayNumber,
+  queue_date: todayStr,
+  called_at: null,
+  completed_at: null,
+  assigned_to: null,
+  counter_number: null,
+  remarks: `Re-entered from deferred by ${staffUsername}`,
+});
+
+// FIX — add call_count: 0
+await this.supabaseService.updateQueueEntry(deferredFra.id, {
+  status: 'WAITING',
+  queue_number: nextNumber,
+  display_number: displayNumber,
+  queue_date: todayStr,
+  called_at: null,
+  completed_at: null,
+  assigned_to: null,
+  counter_number: null,
+  remarks: `Re-entered from deferred by ${staffUsername}`,
+  call_count: 0,              // ← ADD THIS
+});
+```
+
+**Note:** The `reenterDeferred()` "new entry" path (line ~690) correctly calls `addToQueue()` which sets `call_count: 0`. Only the "existing entry update" paths are broken.
+
+---
+
+### BUG-2: Dual kiosk listeners — race condition (MEDIUM, latent)
+
+**Impact:** If any client writes `status = 'PENDING'` to `kiosk_checkins`, both `SupabaseService` and `KioskBridgeService` will race to process it. One sets status to `WAITING`, the other to `PROCESSED`. Outcome depends on timing.
+
+**Currently latent** because the kiosk writes `WAITING` directly, bypassing both listeners. Would activate if a simpler kiosk or mobile client writes PENDING.
+
+**Location 1 — remove this subscription:**
+`apps/backend/src/modules/supabase/supabase.service.ts` — `subscribeToKioskCheckins()` (~line 176-199)
+```typescript
+// This entire method subscribes to kiosk_checkins INSERTs
+// and calls handleKioskCheckin() — DUPLICATES KioskBridgeService
+private subscribeToKioskCheckins(): void {
+  // ... subscription code
+}
+```
+
+Also remove the call to `subscribeToKioskCheckins()` and `processPendingKioskCheckins()` from `onModuleInit()` (~line 87-91).
+
+**Keep only:** `apps/backend/src/modules/kiosk-bridge/kiosk-bridge.service.ts` — this has the subscription with `filter: 'status=eq.PENDING'` plus 5-second polling fallback.
+
+**Fix:** Delete `subscribeToKioskCheckins()` and `processPendingKioskCheckins()` from `supabase.service.ts`. Let `KioskBridgeService` be the single processor.
+
+---
+
+### BUG-3: Service mapping duplication (LOW, maintenance risk)
+
+**Impact:** Slug → series mapping exists in 4+ locations. If a new service is added or a slug changes, it must be updated in all locations or behavior will diverge silently.
+
+**Locations:**
+
+| File | What It Maps | Line |
+|------|-------------|------|
+| `kiosk-bridge.service.ts` | `SERVICE_SLUG_MAP`: slug → ServiceType | ~29-36 |
+| `queue.service.ts` | `slugMap`: ServiceType → slug (reverse) | ~850-857 |
+| `queue.service.ts` | `map`: slug → ServiceType | ~930-936 |
+| `queue.service.ts` | `seriesMap`: hint → QueueSeries | ~658-662 |
+| **nexus-kiosk** `constants.ts` | `SLUG_MAP`: slug → {series, serviceType} | 27-34 |
+
+**Notable mismatch:** `queue.service.ts` mapping B (~line 930) is **missing the `owwa` slug** entirely.
+
+**Fix:** Extract to a single shared constant in `@nexus/types` or a shared module. All consumers import from one source. The kiosk maintains its own copy (separate repo) but should match.
+
+---
+
+### BUG-4: No Supabase realtime health monitoring (LOW)
+
+**Impact:** If the Supabase realtime connection drops, the only indication is a `console.warn`. No admin notification, no health endpoint status, no reconnection logic.
+
+**Mitigated by:** KioskBridgeService's 5-second polling fallback catches missed events. Data loss is unlikely but latency increases to ~5s during outages.
+
+**Locations:**
+- `supabase.service.ts` ~line 126: logs "Will attempt to reconnect" but no actual reconnection code
+- `kiosk-bridge.service.ts` ~line 127-129: logs CLOSED/CHANNEL_ERROR as warnings
+- `admin.service.ts` ~line 115-150: health endpoint does NOT check realtime status
+
+**Fix (optional):** Track last realtime event timestamp. If > 60s without any event, create an admin notification. Add `supabaseRealtimeConnected: boolean` to the health endpoint response.
+
+---
+
+## 17b. Integration Notes
 
 ### For Nexus Backend Developers
 
-1. **call_count not reset on reactivation** — When `reactivateDeferred()`, `reenterDeferred()` (existing path), or FRA `checkInFra()` deferred return re-queues an entry, `call_count` is not reset to 0. Fix: add `call_count: 0` to the update payload in those 3 methods.
-
-2. **Dual kiosk listeners** — Both `SupabaseService` and `KioskBridgeService` subscribe to `kiosk_checkins` INSERTs. If anyone ever writes PENDING entries, both services will race to process them. Fix: consolidate to one listener.
-
-3. **Service mapping duplication** — The slug → series mapping exists in `kiosk-bridge.service.ts`, `queue.service.ts` (2 places), and the kiosk's `constants.ts`. Keep them in sync or extract to a shared source.
-
-4. **Prefix matching still needed** — Even though this kiosk stores full ref_codes, other future clients might not. Keep the prefix matching fallback in Nexus lookup methods.
-
-5. **OWWA quick queue uses OWWA series (not WALKIN_OWWA)** — This is intentional. OWWA walk-ins are served in the same queue as OWWA appointments with priority 7.
+- **Prefix matching still needed** — Even though this kiosk stores full ref_codes, other future clients might not. Keep the prefix matching fallback in Nexus lookup methods.
+- **OWWA quick queue uses OWWA series (not WALKIN_OWWA)** — Intentional. OWWA walk-ins are served in the same queue as OWWA appointments with priority 7.
+- **kiosk writes `appt_status = 'ARRIVED'`** — On the `appointments` table after check-in. Nexus should expect this value and not treat it as an error.
 
 ### For AgencyHire Developers
 
