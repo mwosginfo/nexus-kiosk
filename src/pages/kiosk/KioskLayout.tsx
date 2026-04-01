@@ -7,7 +7,7 @@ import { SuccessScreen } from './SuccessScreen';
 import { ErrorScreen } from './ErrorScreen';
 import { useIdleTimer } from '../../hooks/useIdleTimer';
 import { useScanner } from '../../hooks/useScanner';
-import { UUID_REGEX, resolveServiceLabel } from '../../lib/constants';
+import { detectScanType, resolveServiceLabel } from '../../lib/constants';
 import * as appointmentService from '../../services/appointment.service';
 import * as fraService from '../../services/fra.service';
 import * as queueService from '../../services/queue.service';

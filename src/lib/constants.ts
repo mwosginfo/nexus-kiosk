@@ -106,8 +106,28 @@ export function generateRefCode(): string {
   return code;
 }
 
-/** UUID regex for detecting FRA transaction_ref scans */
+/** UUID regex (used internally by detectScanType) */
 export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Detect whether a scanned QR value is an appointment ref or FRA transaction_ref.
+ *
+ * FRA refs come in two formats from AgencyHire:
+ *   - UUID with hyphens (36 chars): 550e8400-e29b-41d4-a716-446655440000
+ *   - Long alphanumeric (20-30 chars): ABCD1234EFGH5678JKLM9012
+ *
+ * Appointment refs are always 6-10 char uppercase alphanumeric: ABC12345
+ */
+export function detectScanType(value: string): 'APPOINTMENT' | 'FRA' | 'UNKNOWN' {
+  const trimmed = value.trim();
+  // FRA: UUID format (36 chars with hyphens)
+  if (UUID_REGEX.test(trimmed)) return 'FRA';
+  // Appointment: 6-10 char alphanumeric uppercase
+  if (/^[A-Z0-9]{6,10}$/.test(trimmed)) return 'APPOINTMENT';
+  // FRA: 20-30 char alphanumeric (non-UUID format from AgencyHire)
+  if (/^[A-Za-z0-9]{20,30}$/.test(trimmed)) return 'FRA';
+  return 'UNKNOWN';
+}
 
 /** Format today's date as YYYY-MM-DD in SGT (UTC+8) */
 export function todaySGT(): string {
