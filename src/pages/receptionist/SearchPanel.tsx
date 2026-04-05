@@ -10,10 +10,11 @@ import { faUsers, faBuilding, faCalendarDay } from '@fortawesome/free-solid-svg-
 import * as appointmentService from '../../services/appointment.service';
 import * as fraService from '../../services/fra.service';
 import type { AppointmentWithService } from '../../schemas/appointment.schema';
-import type { FraRegistrationRow } from '../../schemas/fra.schema';
+import type { FraRegistrationRow, FraGroup } from '../../schemas/fra.schema';
 
 type SearchTab = 'regular' | 'fra' | 'browse';
 type SearchMode = 'ref_code' | 'phone';
+type BrowseMode = 'appointments' | 'fra';
 
 interface SearchPanelProps {
   readonly onSelectAppointment: (appt: AppointmentWithService) => void;
@@ -32,30 +33,40 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
   const [fraResults, setFraResults] = useState<readonly FraRegistrationRow[]>([]);
 
   // Browse state
+  const [browseMode, setBrowseMode] = useState<BrowseMode>('appointments');
   const [browseSearch, setBrowseSearch] = useState('');
   const [browseDate, setBrowseDate] = useState(todaySGT());
-  const [browseResults, setBrowseResults] = useState<readonly AppointmentWithService[]>([]);
+  const [browseAppointments, setBrowseAppointments] = useState<readonly AppointmentWithService[]>([]);
+  const [browseFraResults, setBrowseFraResults] = useState<readonly FraGroup[]>([]);
 
   const tabRef = useRef(tab);
   tabRef.current = tab;
   const dateRef = useRef(date);
   dateRef.current = date;
 
-  // Auto-load browse results when tab switches or date changes
+  // Auto-load browse results when tab/mode/date changes
   useEffect(() => {
     if (tab === 'browse') {
       void doBrowse();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, browseDate]);
+  }, [tab, browseDate, browseMode]);
 
   async function doBrowse() {
     setLoading(true);
     setError('');
+    setBrowseAppointments([]);
+    setBrowseFraResults([]);
     try {
-      const results = await appointmentService.browseAppointments(browseDate, browseSearch);
-      setBrowseResults(results);
-      if (results.length === 0) setError('No appointments found');
+      if (browseMode === 'fra') {
+        const results = await fraService.browseFra(browseDate, browseSearch);
+        setBrowseFraResults(results);
+        if (results.length === 0) setError('No FRA registrations found');
+      } else {
+        const results = await appointmentService.browseAppointments(browseDate, browseSearch);
+        setBrowseAppointments(results);
+        if (results.length === 0) setError('No appointments found');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Browse failed');
     } finally {
@@ -71,7 +82,7 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
     if (!q) return;
 
     const activeTab = overrides?.forceTab ?? tabRef.current;
-    if (activeTab === 'browse') return; // browse uses doBrowse
+    if (activeTab === 'browse') return;
 
     setLoading(true);
     setError('');
@@ -99,7 +110,7 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
     }
   }
 
-  // QR scanner — auto-detect FRA (UUID or long alphanumeric) vs regular appointment
+  // QR scanner
   useScanner({
     onScan: (scanned) => {
       const scanType = detectScanType(scanned);
@@ -115,9 +126,12 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
     setTab(newTab);
     setAppointments([]);
     setFraResults([]);
-    setBrowseResults([]);
+    setBrowseAppointments([]);
+    setBrowseFraResults([]);
     setError('');
   }
+
+  const browseCount = browseMode === 'fra' ? browseFraResults.length : browseAppointments.length;
 
   return (
     <div className="p-4 space-y-4">
@@ -155,6 +169,26 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
       {/* ─── Browse mode ───────────────────────────────────────────────── */}
       {tab === 'browse' && (
         <>
+          {/* Browse sub-tabs: Appointments vs FRA */}
+          <div className="flex gap-1 bg-gray-50 rounded-lg p-0.5">
+            <button
+              onClick={() => setBrowseMode('appointments')}
+              className={`flex-1 px-3 py-1 text-xs rounded-md font-medium ${
+                browseMode === 'appointments' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'
+              }`}
+            >
+              Appointments
+            </button>
+            <button
+              onClick={() => setBrowseMode('fra')}
+              className={`flex-1 px-3 py-1 text-xs rounded-md font-medium ${
+                browseMode === 'fra' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'
+              }`}
+            >
+              FRA
+            </button>
+          </div>
+
           <div className="flex items-center gap-2">
             <DatePicker value={browseDate} onChange={setBrowseDate} />
           </div>
@@ -163,7 +197,7 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
               value={browseSearch}
               onChange={(e) => setBrowseSearch(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') void doBrowse(); }}
-              placeholder="Search name or email..."
+              placeholder={browseMode === 'fra' ? 'Search FRA name or ref...' : 'Search name or email...'}
               className="flex-1 px-3 py-2 border rounded-lg text-sm border-gray-200 focus:border-teal-500 focus:ring-teal-400/30 focus:outline-none focus:ring-2"
             />
             <button
@@ -178,16 +212,25 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
           {error && <p className="text-sm text-red-500 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
 
           <p className="text-xs text-gray-400">
-            {browseResults.length} appointment{browseResults.length !== 1 ? 's' : ''} for {browseDate}
+            {browseCount} {browseMode === 'fra' ? 'registration' : 'appointment'}{browseCount !== 1 ? 's' : ''} for {browseDate}
           </p>
 
           <div className="space-y-2">
-            {browseResults.map((a) => (
+            {browseMode === 'appointments' && browseAppointments.map((a) => (
               <AppointmentCard
                 key={a.id}
                 appointment={a}
                 selected={selectedId === a.id}
                 onClick={() => onSelectAppointment(a)}
+              />
+            ))}
+            {browseMode === 'fra' && browseFraResults.map((g) => (
+              <FraCard
+                key={g.row.transaction_ref}
+                fra={g.row}
+                group={g}
+                selected={selectedId === g.row.id}
+                onClick={() => onSelectFra(g.row)}
               />
             ))}
           </div>
@@ -197,7 +240,6 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
       {/* ─── Scan / Search mode ────────────────────────────────────────── */}
       {tab !== 'browse' && (
         <>
-          {/* Search mode + date */}
           <div className="flex items-center gap-3">
             <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
               <button
@@ -222,7 +264,6 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
             {searchMode === 'phone' && <DatePicker value={date} onChange={setDate} />}
           </div>
 
-          {/* Search input */}
           <div className="flex gap-2">
             <ScannerInput
               value={searchValue}
@@ -248,7 +289,6 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
 
           {error && <p className="text-sm text-red-500 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
 
-          {/* Results */}
           <div className="space-y-2">
             {tab === 'regular' && appointments.map((a) => (
               <AppointmentCard

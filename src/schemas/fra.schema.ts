@@ -16,3 +16,15 @@ export const FraRegistrationRowSchema = z.object({
   updated_at: z.string(),
 });
 export type FraRegistrationRow = z.infer<typeof FraRegistrationRowSchema>;
+
+/** FRA group — unique transaction_ref with contract count */
+export interface FraGroup {
+  /** Representative row (first contract in the group) */
+  readonly row: FraRegistrationRow;
+  /** Total contracts sharing this transaction_ref */
+  readonly contractCount: number;
+  /** How many are still pending */
+  readonly pendingCount: number;
+  /** How many have arrived */
+  readonly arrivedCount: number;
+}

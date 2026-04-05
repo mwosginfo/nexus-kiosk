@@ -49,6 +49,7 @@ export function resolveQueueSeries(serviceId: string): { series: string; service
  * - OWWA: 9001, 9002... (same series for appointments + walk-ins)
  * - FRA: 1, 2, 3... (displayed as A001, A002...)
  * - WALKIN_REGULAR: 601, 602... (displayed as W601, W602...)
+ * - WALKIN_OWWA: 901, 902... (displayed as W901, W902...)
  */
 export function getStartNumber(series: string): number {
   switch (series) {
@@ -56,6 +57,7 @@ export function getStartNumber(series: string): number {
     case 'OWWA': return 9001;
     case 'FRA': return 1;
     case 'WALKIN_REGULAR': return 601;
+    case 'WALKIN_OWWA': return 901;
     default: return 1;
   }
 }
@@ -66,16 +68,32 @@ export function getStartNumber(series: string): number {
  * - OWWA: "9001", "9002"
  * - FRA: "A001", "A002"
  * - WALKIN_REGULAR: "W601", "W602"
+ * - WALKIN_OWWA: "W901", "W902"
  */
 export function formatQueueDisplay(queueNumber: number, series: string): string {
   switch (series) {
     case 'FRA':
       return `A${String(queueNumber).padStart(3, '0')}`;
     case 'WALKIN_REGULAR':
+    case 'WALKIN_OWWA':
       return `W${queueNumber}`;
     default:
       return String(queueNumber);
   }
+}
+
+/** Check if a date is in the future compared to today SGT */
+export function isFutureDate(dateStr: string): boolean {
+  return dateStr > todaySGT();
+}
+
+/** Check if a date is within N days ahead of today SGT */
+export function isWithinDaysAhead(dateStr: string, days: number): boolean {
+  const today = todaySGT();
+  const sgtNow = new Date(new Date().getTime() + 8 * 60 * 60 * 1000);
+  sgtNow.setUTCDate(sgtNow.getUTCDate() + days);
+  const cutoff = sgtNow.toISOString().slice(0, 10);
+  return dateStr >= today && dateStr <= cutoff;
 }
 
 /** Resolve human-readable service label from service_id */

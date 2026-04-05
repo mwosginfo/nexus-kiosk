@@ -10,10 +10,10 @@
  *   The Nexus kiosk-bridge only processes PENDING entries (for simpler clients
  *   that cannot resolve services). Since we do all that, WAITING is correct.
  *
- * Priority (matches Nexus addToQueue):
- *   3 = APPOINTMENT / FRA (served first)
- *   7 = WALKIN (served after appointments)
- *   Supabase DEFAULT is 5. We always set explicitly.
+ * Priority:
+ *   2 = WALKIN regular (skilled-cv / mdw-cv walk-ins)
+ *   3 = APPOINTMENT / FRA / OWWA walk-in
+ *   Lower number = higher priority. We always set explicitly.
  */
 
 import { getSupabaseWriter } from './supabase.client';
@@ -160,7 +160,10 @@ export async function checkinAndAssignQueue(data: CheckinData): Promise<QueueAss
   const queueNumber = await getNextQueueNumber(data.queueSeries);
   const displayNumber = formatQueueDisplay(queueNumber, data.queueSeries);
 
-  const priority = data.appointmentType === 'WALKIN' ? 7 : 3;
+  // Priority: 2 = regular walk-in, 3 = appointment/FRA/OWWA walk-in
+  const priority = data.appointmentType === 'APPOINTMENT' || data.appointmentType === 'FRA' ? 3
+    : data.queueSeries === 'WALKIN_OWWA' ? 3
+    : 2;
 
   const { error } = await supabase
     .from('kiosk_checkins')
@@ -189,15 +192,15 @@ export async function checkinAndAssignQueue(data: CheckinData): Promise<QueueAss
 // ─── OWWA quick queue (no client details) ──────────────────────────────────
 
 /**
- * Generate the next OWWA queue number with no client details.
- * Inserts a minimal row into kiosk_checkins.
+ * Generate the next OWWA walk-in queue number (W900 series).
+ * No client details needed. Priority 3.
  */
 export async function owwaQuickQueue(): Promise<QueueAssignment> {
   const refCode = `OWWA-${generateRefCode()}`;
   return checkinAndAssignQueue({
     refCode,
     appointmentType: 'WALKIN',
-    queueSeries: 'OWWA',
+    queueSeries: 'WALKIN_OWWA',
     serviceType: 'OWWA',
     clientName: '',
   });
@@ -216,8 +219,8 @@ export interface WalkInData {
 }
 
 /**
- * Register a walk-in client and assign a WALKIN_REGULAR queue number.
- * Walk-ins get priority 7 (lower than appointments at priority 3).
+ * Register a walk-in client and assign a WALKIN_REGULAR queue number (W600 series).
+ * Regular walk-ins get priority 2.
  */
 export async function walkInCheckin(data: WalkInData): Promise<QueueAssignment> {
   if (!checkRateLimit()) {
@@ -248,7 +251,7 @@ export async function walkInCheckin(data: WalkInData): Promise<QueueAssignment> 
       appointment_id: null,
       transaction_ref: refCode,
       queue_date: today,
-      priority: 7,
+      priority: 2,
       call_count: 0,
     });
 

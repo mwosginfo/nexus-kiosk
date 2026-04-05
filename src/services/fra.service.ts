@@ -12,7 +12,7 @@
 
 import { getSupabaseWriter } from './supabase.client';
 import { todaySGT } from '../lib/constants';
-import type { FraRegistrationRow } from '../schemas/fra.schema';
+import type { FraRegistrationRow, FraGroup } from '../schemas/fra.schema';
 
 const FRA_FIELDS = `
   id, transaction_ref, appointment_date, pra, fra,
@@ -58,6 +58,61 @@ export async function lookupByRef(
   }
 
   return data as FraRegistrationRow | null;
+}
+
+/**
+ * Browse FRA registrations by date, grouped by unique transaction_ref.
+ * Returns one FraGroup per transaction_ref with contract counts.
+ * Each group represents a batch — checking in one checks in ALL contracts.
+ */
+export async function browseFra(
+  date: string,
+  search?: string,
+): Promise<readonly FraGroup[]> {
+  const supabase = getSupabaseWriter();
+
+  let query = supabase
+    .from('fra_registrations')
+    .select(FRA_FIELDS)
+    .eq('appointment_date', date);
+
+  if (search && search.trim()) {
+    const q = search.trim();
+    query = query.or(`fra.ilike.%${q}%,transaction_ref.ilike.%${q}%`);
+  }
+
+  const { data, error } = await query
+    .order('created_at', { ascending: true })
+    .limit(500);
+
+  if (error) throw new Error(`FRA browse failed: ${error.message}`);
+
+  const rows = (data ?? []) as readonly FraRegistrationRow[];
+
+  // Group by transaction_ref
+  const groups = new Map<string, FraRegistrationRow[]>();
+  for (const row of rows) {
+    const existing = groups.get(row.transaction_ref);
+    if (existing) {
+      existing.push(row);
+    } else {
+      groups.set(row.transaction_ref, [row]);
+    }
+  }
+
+  // Convert to FraGroup[]
+  const result: FraGroup[] = [];
+  for (const [, contracts] of groups) {
+    const first = contracts[0]!;
+    result.push({
+      row: first,
+      contractCount: contracts.length,
+      pendingCount: contracts.filter((c) => c.status === 'pending').length,
+      arrivedCount: contracts.filter((c) => c.status === 'arrived').length,
+    });
+  }
+
+  return result;
 }
 
 /**

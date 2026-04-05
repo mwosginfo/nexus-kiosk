@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { QueueNumberDisplay } from '../../components/QueueNumberDisplay';
-import { resolveServiceLabel, todaySGT } from '../../lib/constants';
+import { resolveServiceLabel, todaySGT, isFutureDate, isWithinDaysAhead } from '../../lib/constants';
 import * as appointmentService from '../../services/appointment.service';
 import * as fraService from '../../services/fra.service';
 import * as queueService from '../../services/queue.service';
@@ -22,7 +22,7 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete, autoPri
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState('');
 
-  async function handleCheckin() {
+  async function handleCheckin(forceWalkIn = false) {
     if (!selected) return;
     setChecking(true);
     setError('');
@@ -31,10 +31,19 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete, autoPri
       if (selected.type === 'appointment') {
         const appt = selected.data;
 
-        // Validate status + date (P2: receptionist should also validate)
-        const validation = appointmentService.validateAppointment(appt);
-        if (!validation.ok) {
-          setError(validation.message);
+        // Block terminal statuses
+        const rejected = ['cancelled', 'completed', 'no_show'];
+        if (rejected.includes(appt.status)) {
+          setError(`This appointment is ${appt.status} and cannot be checked in.`);
+          setChecking(false);
+          return;
+        }
+
+        const isFuture = isFutureDate(appt.appointment_date);
+
+        // Future: block if beyond 14 days
+        if (isFuture && !isWithinDaysAhead(appt.appointment_date, 14)) {
+          setError(`Appointment is for ${appt.appointment_date}, which is more than 14 days ahead.`);
           setChecking(false);
           return;
         }
@@ -47,19 +56,20 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete, autoPri
           return;
         }
 
-        // Look up service info
-        const serviceInfo = await appointmentService.lookupServiceInfo(appt.service_id);
-
         const name = [appt.ofw_fname, appt.ofw_mname, appt.ofw_lname]
           .filter(Boolean)
           .join(' ');
         const serviceLabel = resolveServiceLabel(appt.service_id);
 
-        // Assign queue number + write to kiosk_checkins
+        // Future appointments approved by receptionist → check in as WALK-IN (W600 series)
+        const useWalkIn = forceWalkIn || isFuture;
+
+        const serviceInfo = await appointmentService.lookupServiceInfo(appt.service_id);
+
         const assignment = await queueService.checkinAndAssignQueue({
           refCode: appt.ref_code,
-          appointmentType: 'APPOINTMENT',
-          queueSeries: serviceInfo.series,
+          appointmentType: useWalkIn ? 'WALKIN' : 'APPOINTMENT',
+          queueSeries: useWalkIn ? 'WALKIN_REGULAR' : serviceInfo.series,
           serviceType: serviceInfo.serviceType,
           clientName: name,
           clientEmail: appt.client_email,
@@ -72,7 +82,7 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete, autoPri
 
         onCheckinComplete(assignment.displayNumber, name);
 
-        // Print in background (if auto-print enabled)
+        // Print ticket (always print when receptionist approves, including future)
         if (autoPrint) {
           window.electronAPI.printTicket({
             queueNumber: assignment.displayNumber,
@@ -83,14 +93,12 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete, autoPri
       } else {
         const fra = selected.data;
 
-        // Validate FRA status (P2: receptionist should also validate)
         if (fra.status === 'completed' || fra.status === 'cancelled') {
           setError(`This FRA registration is ${fra.status} and cannot be checked in.`);
           setChecking(false);
           return;
         }
 
-        // Validate FRA date (past 14 days only)
         const today = todaySGT();
         if (fra.appointment_date && fra.appointment_date > today) {
           setError(`FRA appointment is for ${fra.appointment_date}, which is in the future.`);
@@ -98,7 +106,6 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete, autoPri
           return;
         }
 
-        // Check duplicate
         const dup = await queueService.checkDuplicate(fra.transaction_ref);
         if (dup) {
           setError(`Already checked in as Q#${dup.displayNumber}.`);
@@ -106,7 +113,6 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete, autoPri
           return;
         }
 
-        // Assign FRA queue number + write to kiosk_checkins
         const assignment = await queueService.checkinAndAssignQueue({
           refCode: fra.transaction_ref,
           appointmentType: 'FRA',
@@ -116,12 +122,10 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete, autoPri
           transactionRef: fra.transaction_ref,
         });
 
-        // Mark arrived (fire-and-forget)
         fraService.markArrived(fra.transaction_ref).catch(() => {});
 
         onCheckinComplete(assignment.displayNumber, fra.fra);
 
-        // Print in background (if auto-print enabled)
         if (autoPrint) {
           window.electronAPI.printTicket({
             queueNumber: assignment.displayNumber,
@@ -152,7 +156,7 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete, autoPri
     }
   }
 
-  // No selection — show last checkin or empty state
+  // ─── No selection ──────────────────────────────────────────────────────
   if (!selected) {
     if (lastCheckin) {
       return (
@@ -176,23 +180,37 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete, autoPri
     );
   }
 
-  // Selected appointment detail
+  // ─── Appointment detail ────────────────────────────────────────────────
   if (selected.type === 'appointment') {
     const a = selected.data;
     const name = [a.ofw_fname, a.ofw_mname, a.ofw_lname].filter(Boolean).join(' ');
     const serviceLabel = a.services?.name ?? resolveServiceLabel(a.service_id);
 
-    // Visual warning for non-today or non-active appointments
     const isNotToday = a.appointment_date !== todaySGT();
+    const isFuture = isFutureDate(a.appointment_date);
     const isTerminal = ['cancelled', 'completed', 'no_show'].includes(a.status);
+    const isDeferred = a.status === 'deferred' || a.appt_status === 'DEFERRED';
 
     return (
       <div className="space-y-6">
         <h2 className="text-xl font-bold text-gray-800">Appointment Details</h2>
 
-        {isNotToday && (
+        {isFuture && (
+          <div className="text-sm text-blue-700 bg-blue-50 border border-blue-300 rounded-lg px-4 py-3">
+            <strong>Future appointment:</strong> Scheduled for <strong>{a.appointment_date}</strong>.
+            Review details and approve below to check in as walk-in.
+          </div>
+        )}
+
+        {isNotToday && !isFuture && (
           <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
-            This appointment is for <strong>{a.appointment_date}</strong>, not today.
+            This appointment was for <strong>{a.appointment_date}</strong> (past date).
+          </div>
+        )}
+
+        {isDeferred && (
+          <div className="text-sm text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-4 py-3">
+            This appointment was previously <strong>deferred</strong>. Re-check-in will issue a new queue number.
           </div>
         )}
 
@@ -222,7 +240,9 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete, autoPri
             </div>
             <div>
               <p className="text-xs text-gray-400 uppercase">Date / Time</p>
-              <p className="text-gray-700">{a.appointment_date} {a.start_time}</p>
+              <p className={`font-medium ${isFuture ? 'text-blue-600' : isNotToday ? 'text-amber-600' : 'text-gray-700'}`}>
+                {a.appointment_date} {a.start_time}
+              </p>
             </div>
             <div>
               <p className="text-xs text-gray-400 uppercase">Contact</p>
@@ -235,24 +255,42 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete, autoPri
           <p className="text-sm text-red-500 bg-red-50 rounded-lg px-4 py-3">{error}</p>
         )}
 
-        <button
-          onClick={() => void handleCheckin()}
-          disabled={checking || isTerminal}
-          className="w-full py-4 text-lg font-bold text-white bg-teal-500 rounded-xl hover:bg-teal-600 disabled:opacity-50 transition-colors"
-        >
-          {checking ? 'Checking In...' : 'Check In & Print Ticket'}
-        </button>
+        {/* Future: two-step — "Approve & Check In as Walk-in" */}
+        {isFuture && !isTerminal && (
+          <button
+            onClick={() => void handleCheckin(true)}
+            disabled={checking}
+            className="w-full py-4 text-lg font-bold text-white bg-blue-600 rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors"
+          >
+            {checking ? 'Checking In...' : 'Approve & Check In as Walk-in'}
+          </button>
+        )}
+
+        {/* Today / past: normal check-in */}
+        {!isFuture && !isTerminal && (
+          <button
+            onClick={() => void handleCheckin()}
+            disabled={checking}
+            className="w-full py-4 text-lg font-bold text-white bg-teal-500 rounded-xl hover:bg-teal-600 disabled:opacity-50 transition-colors"
+          >
+            {checking ? 'Checking In...' : 'Check In & Print Ticket'}
+          </button>
+        )}
       </div>
     );
   }
 
-  // Selected FRA detail
+  // ─── FRA detail ────────────────────────────────────────────────────────
   const f = selected.data;
   const isTerminalFra = f.status === 'completed' || f.status === 'cancelled';
 
   return (
     <div className="space-y-6">
       <h2 className="text-xl font-bold text-gray-800">FRA Registration Details</h2>
+
+      <div className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
+        <strong>Batch check-in:</strong> All contracts under this transaction ref will be checked in together.
+      </div>
 
       {isTerminalFra && (
         <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
@@ -298,7 +336,7 @@ export function CheckinPanel({ selected, lastCheckin, onCheckinComplete, autoPri
         disabled={checking || isTerminalFra}
         className="w-full py-4 text-lg font-bold text-white bg-blue-500 rounded-xl hover:bg-blue-600 disabled:opacity-50 transition-colors"
       >
-        {checking ? 'Checking In...' : 'Check In & Print Ticket'}
+        {checking ? 'Checking In...' : 'Batch Check In & Print Ticket'}
       </button>
     </div>
   );
