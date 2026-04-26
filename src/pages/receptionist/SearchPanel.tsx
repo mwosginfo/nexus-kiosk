@@ -91,7 +91,7 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
 
     try {
       if (activeTab === 'fra') {
-        const result = await fraService.lookupByRef(q);
+        const result = await fraService.lookupByRef(q, { strict: false });
         setFraResults(result ? [result] : []);
         if (!result) setError('No FRA registration found');
       } else if (searchMode === 'ref_code') {

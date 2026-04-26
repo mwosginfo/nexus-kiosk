@@ -145,6 +145,22 @@ export async function markArrived(appointmentId: string): Promise<void> {
   }
 }
 
+/**
+ * Transition a deferred appointment back to ARRIVED on re-check-in.
+ * Clears staff_notes so the client can be deferred again later if needed.
+ */
+export async function markArrivedFromDeferred(appointmentId: string): Promise<void> {
+  const supabase = getSupabaseWriter();
+  const { error } = await supabase
+    .from('appointments')
+    .update({ appt_status: 'ARRIVED', staff_notes: null })
+    .eq('id', appointmentId);
+
+  if (error) {
+    console.warn('[appointment.markArrivedFromDeferred] Error (non-fatal):', error.message);
+  }
+}
+
 // ─── Service slug lookup ───────────────────────────────────────────────────
 
 export async function lookupServiceInfo(

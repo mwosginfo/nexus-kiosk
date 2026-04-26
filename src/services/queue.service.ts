@@ -56,6 +56,8 @@ export interface CheckinData {
   readonly clientEmail?: string;
   readonly appointmentId?: string;
   readonly transactionRef?: string;
+  /** Optional tag — e.g., "PICKUP", "DEFERRED" — for receptionist tracking */
+  readonly remarks?: string;
 }
 
 // ─── Duplicate check ───────────────────────────────────────────────────────
@@ -182,6 +184,7 @@ export async function checkinAndAssignQueue(data: CheckinData): Promise<QueueAss
       queue_date: today,
       priority,
       call_count: 0,
+      remarks: data.remarks ?? null,
     });
 
   if (error) throw new Error(`Check-in failed: ${error.message}`);

@@ -1,13 +1,8 @@
 /**
- * FRA Service — lookup and mark arrived only.
- * This app does NOT create FRA registrations or modify worker data.
+ * FRA Service — lookup, group analysis, and status updates.
  *
- * READ operations use the anon client (least privilege).
- * WRITE operations (markArrived) use the service role client.
- *
- * FRA registrations can be checked in from appointments within the past 14 days
- * (not just today). Agencies sometimes check in for prior-date appointments.
- * Future appointments are NOT allowed — only today and 14 days back.
+ * Receptionist mode supports any date (future/today/past).
+ * Kiosk mode (strict): today + 14 days back only, no future.
  */
 
 import { getSupabaseWriter } from './supabase.client';
@@ -20,9 +15,7 @@ const FRA_FIELDS = `
   arrived_at, staff_notes, created_at, updated_at
 `;
 
-/**
- * Calculate date 14 days ago in SGT (YYYY-MM-DD).
- */
+/** Calculate date 14 days ago in SGT (YYYY-MM-DD). */
 function fourteenDaysAgoSGT(): string {
   const now = new Date();
   const sgt = new Date(now.getTime() + 8 * 60 * 60 * 1000);
@@ -30,25 +23,38 @@ function fourteenDaysAgoSGT(): string {
   return sgt.toISOString().slice(0, 10);
 }
 
+export interface LookupOptions {
+  /** Strict mode (kiosk): today + 14 days back, no future. Default true. */
+  readonly strict?: boolean;
+}
+
 /**
- * Look up FRA registration by transaction_ref within the past 14 days.
+ * Look up FRA registration by transaction_ref.
  * Excludes cancelled registrations.
- * Only looks back 14 days (no future appointments allowed).
+ * Strict mode (default): today + 14 days back only.
+ * Permissive mode: any date.
  */
 export async function lookupByRef(
   transactionRef: string,
+  options: LookupOptions = {},
 ): Promise<FraRegistrationRow | null> {
-  const supabase = getSupabaseWriter(); // service role required (RLS may restrict anon)
-  const today = todaySGT();
-  const cutoffDate = fourteenDaysAgoSGT();
+  const supabase = getSupabaseWriter();
+  const strict = options.strict !== false;
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('fra_registrations')
     .select(FRA_FIELDS)
     .eq('transaction_ref', transactionRef.trim())
-    .gte('appointment_date', cutoffDate)
-    .lte('appointment_date', today)
-    .neq('status', 'cancelled')
+    .neq('status', 'cancelled');
+
+  if (strict) {
+    const today = todaySGT();
+    const cutoffDate = fourteenDaysAgoSGT();
+    query = query.gte('appointment_date', cutoffDate).lte('appointment_date', today);
+  }
+
+  const { data, error } = await query
+    .order('created_at', { ascending: true })
     .limit(1)
     .maybeSingle();
 
@@ -61,9 +67,24 @@ export async function lookupByRef(
 }
 
 /**
+ * Get ALL contracts in a transaction_ref group.
+ * Used to analyze pickup/deferred state for receptionist mode.
+ */
+export async function getGroupContracts(
+  transactionRef: string,
+): Promise<readonly FraRegistrationRow[]> {
+  const supabase = getSupabaseWriter();
+  const { data, error } = await supabase
+    .from('fra_registrations')
+    .select(FRA_FIELDS)
+    .eq('transaction_ref', transactionRef);
+
+  if (error) throw new Error(`Get group contracts failed: ${error.message}`);
+  return (data ?? []) as readonly FraRegistrationRow[];
+}
+
+/**
  * Browse FRA registrations by date, grouped by unique transaction_ref.
- * Returns one FraGroup per transaction_ref with contract counts.
- * Each group represents a batch — checking in one checks in ALL contracts.
  */
 export async function browseFra(
   date: string,
@@ -89,23 +110,17 @@ export async function browseFra(
 
   const rows = (data ?? []) as readonly FraRegistrationRow[];
 
-  // Group by transaction_ref
   const groups = new Map<string, FraRegistrationRow[]>();
   for (const row of rows) {
     const existing = groups.get(row.transaction_ref);
-    if (existing) {
-      existing.push(row);
-    } else {
-      groups.set(row.transaction_ref, [row]);
-    }
+    if (existing) existing.push(row);
+    else groups.set(row.transaction_ref, [row]);
   }
 
-  // Convert to FraGroup[]
   const result: FraGroup[] = [];
   for (const [, contracts] of groups) {
-    const first = contracts[0]!;
     result.push({
-      row: first,
+      row: contracts[0]!,
       contractCount: contracts.length,
       pendingCount: contracts.filter((c) => c.status === 'pending').length,
       arrivedCount: contracts.filter((c) => c.status === 'arrived').length,
@@ -115,23 +130,72 @@ export async function browseFra(
   return result;
 }
 
+// ─── Group analysis ────────────────────────────────────────────────────────
+
+export interface FraGroupAnalysis {
+  readonly all: readonly FraRegistrationRow[];
+  /** status === 'completed' — ready for pickup */
+  readonly pickupContracts: readonly FraRegistrationRow[];
+  /** status === 'arrived' AND staff_notes IS NOT NULL — deferred */
+  readonly deferredContracts: readonly FraRegistrationRow[];
+  /** Everything else (pending, arrived without notes, picked-up, etc.) */
+  readonly otherContracts: readonly FraRegistrationRow[];
+}
+
 /**
- * Mark ALL pending FRA contracts in a batch as arrived.
- * Updates by transaction_ref (not individual id) to match Nexus behavior.
- * Fire-and-forget — check-in succeeds even if this update fails.
+ * Categorize FRA contracts within a group.
+ *  - pickup    = status='completed'
+ *  - deferred  = status='arrived' AND staff_notes is non-empty
+ *  - other     = anything else
  */
+export function analyzeFraGroup(
+  contracts: readonly FraRegistrationRow[],
+): FraGroupAnalysis {
+  const pickup: FraRegistrationRow[] = [];
+  const deferred: FraRegistrationRow[] = [];
+  const other: FraRegistrationRow[] = [];
+  for (const c of contracts) {
+    if (c.status === 'completed') pickup.push(c);
+    else if (c.status === 'arrived' && c.staff_notes && c.staff_notes.trim().length > 0) deferred.push(c);
+    else other.push(c);
+  }
+  return { all: contracts, pickupContracts: pickup, deferredContracts: deferred, otherContracts: other };
+}
+
+// ─── Status updates ────────────────────────────────────────────────────────
+
+/** Mark ALL pending FRA contracts in a batch as arrived (used for normal check-in). */
 export async function markArrived(transactionRef: string): Promise<void> {
   const supabase = getSupabaseWriter();
   const { error } = await supabase
     .from('fra_registrations')
-    .update({
-      status: 'arrived',
-      arrived_at: new Date().toISOString(),
-    })
+    .update({ status: 'arrived', arrived_at: new Date().toISOString() })
     .eq('transaction_ref', transactionRef)
     .eq('status', 'pending');
 
-  if (error) {
-    console.warn('[fra.markArrived] Error (non-fatal):', error.message);
-  }
+  if (error) console.warn('[fra.markArrived] Error (non-fatal):', error.message);
+}
+
+/** Mark a set of contracts as picked-up (for FRA pickup flow). */
+export async function markPickedUp(ids: ReadonlyArray<string>): Promise<void> {
+  if (ids.length === 0) return;
+  const supabase = getSupabaseWriter();
+  const { error } = await supabase
+    .from('fra_registrations')
+    .update({ status: 'picked-up' })
+    .in('id', [...ids]);
+
+  if (error) console.warn('[fra.markPickedUp] Error (non-fatal):', error.message);
+}
+
+/** Clear staff_notes for a set of contracts (for FRA deferred re-checkin). */
+export async function clearStaffNotes(ids: ReadonlyArray<string>): Promise<void> {
+  if (ids.length === 0) return;
+  const supabase = getSupabaseWriter();
+  const { error } = await supabase
+    .from('fra_registrations')
+    .update({ staff_notes: null })
+    .in('id', [...ids]);
+
+  if (error) console.warn('[fra.clearStaffNotes] Error (non-fatal):', error.message);
 }
