@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback } from 'react';
 import { SearchPanel } from './SearchPanel';
 import { CheckinPanel } from './CheckinPanel';
 import { WalkInModal } from './WalkInModal';
+import { UrgentFraModal } from './UrgentFraModal';
 import { StatusBanner } from '../../components/StatusBanner';
 import { useMode } from '../../contexts/ModeContext';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faGear, faUserPlus, faBolt, faPrint } from '@fortawesome/free-solid-svg-icons';
+import { faGear, faUserPlus, faBolt, faPrint, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 import { getSupabaseWriter } from '../../services/supabase.client';
 import { todaySGT } from '../../lib/constants';
 import * as queueService from '../../services/queue.service';
@@ -27,6 +28,7 @@ export function ReceptionistLayout() {
   const { toggleSettings, settings, updateSettings } = useMode();
   const [selected, setSelected] = useState<SelectedItem | null>(null);
   const [walkInOpen, setWalkInOpen] = useState(false);
+  const [urgentFraOpen, setUrgentFraOpen] = useState(false);
   const [lastCheckin, setLastCheckin] = useState<{ queueNumber: string; name: string } | null>(null);
   const [owwaLoading, setOwwaLoading] = useState(false);
   const [stats, setStats] = useState<QueueStats>({ checkedIn: 0, waiting: 0, served: 0 });
@@ -150,6 +152,14 @@ export function ReceptionistLayout() {
             {owwaLoading ? '...' : 'OWWA'}
           </button>
           <button
+            onClick={() => setUrgentFraOpen(true)}
+            className="px-4 py-2 text-sm text-white bg-orange-500 rounded-lg hover:bg-orange-600 flex items-center gap-2"
+            title="Urgent FRA — walk-in agency registration"
+          >
+            <FontAwesomeIcon icon={faTriangleExclamation} />
+            Urgent FRA
+          </button>
+          <button
             onClick={() => setWalkInOpen(true)}
             className="px-4 py-2 text-sm text-white bg-blue-500 rounded-lg hover:bg-blue-600 flex items-center gap-2"
           >
@@ -202,6 +212,16 @@ export function ReceptionistLayout() {
           setWalkInOpen(false);
           setLastCheckin({ queueNumber, name });
           void fetchStats();
+        }}
+      />
+
+      {/* Urgent FRA Modal */}
+      <UrgentFraModal
+        open={urgentFraOpen}
+        onClose={() => setUrgentFraOpen(false)}
+        onSuccess={() => {
+          // Stats don't change here — invitation is created, not a check-in.
+          // Client returns later with transaction_ref for actual check-in.
         }}
       />
     </div>

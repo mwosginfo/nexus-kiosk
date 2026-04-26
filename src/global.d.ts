@@ -5,6 +5,15 @@ interface TicketData {
   readonly serviceType: string;
 }
 
+interface QrTicketData {
+  readonly title: string;
+  readonly qrDataUrl: string;
+  readonly pra: string;
+  readonly fra: string;
+  readonly contractCount: number;
+  readonly instructions: string;
+}
+
 interface PrinterInfo {
   readonly name: string;
   readonly isDefault: boolean;
@@ -25,6 +34,7 @@ interface ElectronAPI {
   getSettings(): Promise<KioskSettings>;
   saveSettings(settings: Partial<KioskSettings>): Promise<void>;
   printTicket(data: TicketData): Promise<void>;
+  printQrTicket(data: QrTicketData): Promise<void>;
   getPrinters(): Promise<PrinterInfo[]>;
   switchMode(mode: string): void;
   onToggleSettings(callback: () => void): () => void;

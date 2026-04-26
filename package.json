@@ -16,7 +16,9 @@
     "@fortawesome/free-solid-svg-icons": "^7.2.0",
     "@fortawesome/react-fontawesome": "^3.3.0",
     "@supabase/supabase-js": "^2.49.0",
+    "@types/qrcode": "^1.5.6",
     "electron-store": "^8.2.0",
+    "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^3.24.0"
