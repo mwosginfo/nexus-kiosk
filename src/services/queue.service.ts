@@ -209,6 +209,37 @@ export async function owwaQuickQueue(): Promise<QueueAssignment> {
   });
 }
 
+// ─── Lost-booking FRA (agency quick queue) ────────────────────────────────
+
+export interface LostBookingData {
+  readonly fra: string;
+  readonly workerCount: number;
+}
+
+/**
+ * Special agency queue for FRA bookings whose original data was lost from backup.
+ * Collects only FRA name + worker count; issues an A-series (FRA) queue number.
+ * Marked with remarks='LOST_BOOKING' for audit.
+ */
+export async function lostBookingCheckin(data: LostBookingData): Promise<QueueAssignment> {
+  const fra = data.fra.trim();
+  if (!fra) throw new Error('FRA name is required.');
+  if (!Number.isInteger(data.workerCount) || data.workerCount < 1 || data.workerCount > 50) {
+    throw new Error('Worker count must be between 1 and 50.');
+  }
+
+  const refCode = `LOST-${generateRefCode()}`;
+  return checkinAndAssignQueue({
+    refCode,
+    appointmentType: 'FRA',
+    queueSeries: 'FRA',
+    serviceType: 'FRA_REGISTRATION',
+    clientName: `${fra} (${data.workerCount} worker${data.workerCount === 1 ? '' : 's'})`,
+    transactionRef: refCode,
+    remarks: 'LOST_BOOKING',
+  });
+}
+
 // ─── Walk-in registration (skilled-cv / mdw-cv) ───────────────────────────
 
 export interface WalkInData {

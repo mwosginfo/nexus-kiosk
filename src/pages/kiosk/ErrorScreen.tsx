@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleXmark } from '@fortawesome/free-solid-svg-icons';
+import { KioskHeader } from '../../components/KioskHeader';
 
 interface ErrorScreenProps {
   readonly message?: string;
@@ -8,38 +7,32 @@ interface ErrorScreenProps {
 }
 
 export function ErrorScreen({ message, onRetry }: ErrorScreenProps) {
-  // Auto-return to type select after 5 seconds
   useEffect(() => {
-    const timer = setTimeout(onRetry, 5_000);
+    const timer = setTimeout(onRetry, 6_000);
     return () => clearTimeout(timer);
   }, [onRetry]);
 
   return (
     <button
+      type="button"
       onClick={onRetry}
-      className="kiosk-mode w-full min-h-screen flex flex-col items-center justify-center bg-red-50"
+      className="kiosk-mode w-full min-h-screen flex flex-col bg-brand-paper focus:outline-none focus-visible:ring-4 focus-visible:ring-brand-burgundy/30"
     >
-      <div className="text-center space-y-8">
-        <FontAwesomeIcon icon={faCircleXmark} className="text-red-500" style={{ fontSize: '8rem' }} />
+      <KioskHeader kicker="Unable to Check In" />
 
-        <div className="space-y-3">
-          <p className="text-3xl font-bold text-gray-800">
-            Appointment Not Found
-          </p>
-          <p className="text-xl text-gray-500">
-            Please try again or see the receptionist for assistance
-          </p>
-          {message && (
-            <p className="text-sm text-red-400 font-mono mt-4 max-w-md mx-auto">
-              {message}
-            </p>
-          )}
-        </div>
+      <main className="flex-1 flex flex-col items-center justify-center px-[clamp(2rem,4vw,6rem)] text-center" role="alert" aria-live="assertive">
+        <div className="w-16 h-1 rounded-full bg-brand-burgundy mb-[clamp(1.5rem,2vw,2.5rem)]" aria-hidden="true" />
 
-        <p className="text-sm text-gray-400 animate-pulse">
-          Touch anywhere to try again
+        <p className="text-[clamp(1.5rem,2.4vw,3rem)] font-bold text-brand-ink leading-snug max-w-3xl text-pretty">
+          {message || 'Please try again or see the receptionist for assistance.'}
         </p>
-      </div>
+
+        <p className="mt-[clamp(1.5rem,2vw,2.5rem)] text-[clamp(0.85rem,0.95vw,1.1rem)] text-gray-400 motion-safe:animate-pulse">
+          Touch Anywhere to Try Again
+        </p>
+      </main>
+
+      <div className="brand-strip" aria-hidden="true" />
     </button>
   );
 }

@@ -3,6 +3,11 @@ interface OnScreenKeyboardProps {
   readonly value: string;
   readonly onChange: (value: string) => void;
   readonly onSubmit: () => void;
+  readonly accent?: 'navy' | 'burgundy';
+  /** Show a wide space bar at the bottom of the alphanumeric layout */
+  readonly allowSpace?: boolean;
+  /** Override the Search button label */
+  readonly submitLabel?: string;
 }
 
 const ALPHA_ROWS = [
@@ -18,7 +23,15 @@ const NUMERIC_ROWS = [
   ['+', '0'],
 ] as const;
 
-export function OnScreenKeyboard({ mode, value, onChange, onSubmit }: OnScreenKeyboardProps) {
+export function OnScreenKeyboard({
+  mode,
+  value,
+  onChange,
+  onSubmit,
+  accent = 'navy',
+  allowSpace = false,
+  submitLabel = 'Search',
+}: OnScreenKeyboardProps) {
   function press(key: string) {
     onChange(value + key);
   }
@@ -27,28 +40,53 @@ export function OnScreenKeyboard({ mode, value, onChange, onSubmit }: OnScreenKe
     onChange(value.slice(0, -1));
   }
 
+  // Generously sized for 2160x1440 kiosk hardware — fat-finger-friendly,
+  // scales down to 1024px gracefully via clamp().
+  // Key width target: ~7vw → on 2160px the row of 10 keys fills ~70% of viewport.
   const keyClass =
-    'flex items-center justify-center min-w-[56px] h-14 rounded-xl bg-white border-2 border-gray-200 text-xl font-mono font-bold text-gray-800 active:bg-gray-200 active:border-gray-400 transition-colors select-none cursor-pointer hover:bg-gray-50';
+    'flex items-center justify-center rounded-2xl bg-white border-2 border-gray-200 ' +
+    'w-[clamp(72px,6.6vw,148px)] h-[clamp(72px,6vw,140px)] ' +
+    'text-[clamp(1.6rem,2.1vw,2.8rem)] font-mono font-bold text-brand-ink ' +
+    'shadow-sm hover:bg-gray-50 hover:border-brand-navy/40 ' +
+    'active:bg-gray-100 active:scale-[0.97] ' +
+    'transition-[background-color,border-color,transform] duration-100 ' +
+    'select-none focus:outline-none focus-visible:ring-4 focus-visible:ring-brand-navy/30';
+
+  const submitBg = accent === 'burgundy' ? 'bg-brand-burgundy' : 'bg-brand-navy';
+  const submitHover = accent === 'burgundy' ? 'hover:bg-brand-burgundy/90' : 'hover:bg-brand-navy/90';
+  const submitRing = accent === 'burgundy' ? 'focus-visible:ring-brand-burgundy/40' : 'focus-visible:ring-brand-navy/40';
 
   if (mode === 'numeric') {
     return (
-      <div className="flex flex-col items-center gap-3">
+      <div className="flex flex-col items-center gap-[clamp(0.7rem,0.9vw,1.4rem)] w-[70vw] max-w-[1500px]">
         {NUMERIC_ROWS.map((row, i) => (
-          <div key={i} className="flex gap-3">
+          <div key={i} className="flex gap-[clamp(0.7rem,0.9vw,1.4rem)] justify-center">
             {row.map((key) => (
-              <button key={key} className={`${keyClass} w-20`} onClick={() => press(key)}>
+              <button
+                key={key}
+                type="button"
+                aria-label={`Key ${key}`}
+                className={keyClass}
+                onClick={() => press(key)}
+              >
                 {key}
               </button>
             ))}
             {i === 3 && (
-              <button className={`${keyClass} w-20 text-red-500`} onClick={backspace}>
+              <button
+                type="button"
+                aria-label="Backspace"
+                className={`${keyClass} text-brand-burgundy`}
+                onClick={backspace}
+              >
                 &#9003;
               </button>
             )}
           </div>
         ))}
         <button
-          className="mt-2 px-12 py-4 rounded-xl bg-teal-500 text-white text-xl font-bold hover:bg-teal-600 active:bg-teal-700 transition-colors"
+          type="button"
+          className={`${submitBg} ${submitHover} mt-[clamp(0.6rem,1vw,1.4rem)] px-[clamp(3rem,5vw,7rem)] py-[clamp(1rem,1.4vw,1.9rem)] rounded-2xl text-white text-[clamp(1.2rem,1.6vw,1.9rem)] font-bold tracking-wide transition-[background-color] duration-150 focus:outline-none focus-visible:ring-4 ${submitRing}`}
           onClick={onSubmit}
         >
           Search
@@ -57,37 +95,65 @@ export function OnScreenKeyboard({ mode, value, onChange, onSubmit }: OnScreenKe
     );
   }
 
-  // Alphanumeric
+  // Alphanumeric — number row of 10 keys fills ~70% of viewport at 2160 width
   return (
-    <div className="flex flex-col items-center gap-2">
-      {/* Number row */}
-      <div className="flex gap-1.5">
+    <div className="flex flex-col items-center gap-[clamp(0.5rem,0.7vw,1.1rem)] w-[70vw] max-w-[1600px]">
+      <div className="flex gap-[clamp(0.5rem,0.7vw,1.1rem)] justify-center">
         {['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'].map((key) => (
-          <button key={key} className={`${keyClass} min-w-[48px] h-12 text-lg`} onClick={() => press(key)}>
+          <button
+            key={key}
+            type="button"
+            aria-label={`Key ${key}`}
+            className={keyClass}
+            onClick={() => press(key)}
+          >
             {key}
           </button>
         ))}
       </div>
-      {/* Letter rows */}
       {ALPHA_ROWS.map((row, i) => (
-        <div key={i} className="flex gap-1.5">
+        <div key={i} className="flex gap-[clamp(0.5rem,0.7vw,1.1rem)] justify-center">
           {row.map((key) => (
-            <button key={key} className={`${keyClass} min-w-[48px] h-12 text-lg`} onClick={() => press(key)}>
+            <button
+              key={key}
+              type="button"
+              aria-label={`Key ${key}`}
+              className={keyClass}
+              onClick={() => press(key)}
+            >
               {key}
             </button>
           ))}
           {i === 2 && (
-            <button className={`${keyClass} min-w-[64px] h-12 text-lg text-red-500`} onClick={backspace}>
+            <button
+              type="button"
+              aria-label="Backspace"
+              className={`${keyClass} text-brand-burgundy w-[clamp(96px,8.5vw,200px)]`}
+              onClick={backspace}
+            >
               &#9003;
             </button>
           )}
         </div>
       ))}
+      {allowSpace && (
+        <div className="flex gap-[clamp(0.5rem,0.7vw,1.1rem)] justify-center">
+          <button
+            type="button"
+            aria-label="Space"
+            className={`${keyClass} w-[clamp(360px,32vw,720px)] text-base tracking-[0.4em] text-gray-500`}
+            onClick={() => press(' ')}
+          >
+            SPACE
+          </button>
+        </div>
+      )}
       <button
-        className="mt-2 px-12 py-3 rounded-xl bg-teal-500 text-white text-xl font-bold hover:bg-teal-600 active:bg-teal-700 transition-colors"
+        type="button"
+        className={`${submitBg} ${submitHover} mt-[clamp(0.6rem,1vw,1.4rem)] px-[clamp(3rem,5vw,7rem)] py-[clamp(1rem,1.4vw,1.9rem)] rounded-2xl text-white text-[clamp(1.2rem,1.6vw,1.9rem)] font-bold tracking-wide transition-[background-color] duration-150 focus:outline-none focus-visible:ring-4 ${submitRing}`}
         onClick={onSubmit}
       >
-        Search
+        {submitLabel}
       </button>
     </div>
   );

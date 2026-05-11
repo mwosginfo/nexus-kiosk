@@ -94,18 +94,21 @@ export function UrgentFraModal({ open, onClose, onSuccess }: UrgentFraModalProps
 
       window.electronAPI.printQrTicket({
         title: 'URGENT FRA REGISTRATION',
-        qrDataUrl,
+        qrText: result.url,
         pra,
         fra,
         contractCount: workers.length,
-        instructions:
-          '<ol>' +
-          '<li>Scan QR with your phone camera.</li>' +
-          '<li>Open the link to complete the FRA registration form.</li>' +
-          '<li>Fill in worker business details &amp; submit.</li>' +
-          '<li>Return to reception with the transaction ref to get your queue number.</li>' +
-          '<li>Link expires in 48 hours.</li>' +
-          '</ol>',
+        instructions: [
+          '1. Scan QR with your phone camera.',
+          '2. Open the link to complete the FRA',
+          '   registration form.',
+          '3. Fill in worker business details &',
+          '   submit.',
+          '4. Return to reception with the',
+          '   transaction ref to get your',
+          '   queue number.',
+          '5. Link expires in 48 hours.',
+        ].join('\n'),
       }).catch((err: unknown) => console.error('[UrgentFraModal] Print error:', err));
 
       setResultUrl(result.url);

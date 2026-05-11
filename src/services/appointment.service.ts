@@ -4,7 +4,7 @@
 
 import { getSupabaseWriter } from './supabase.client';
 import type { AppointmentWithService } from '../schemas/appointment.schema';
-import { todaySGT, SLUG_MAP, resolveQueueSeries } from '../lib/constants';
+import { todaySGT, daysAgoSGT, SLUG_MAP, resolveQueueSeries } from '../lib/constants';
 
 const APPOINTMENT_FIELDS = `
   id, ref_code, service_id, appointment_date, start_time, end_time,
@@ -104,7 +104,12 @@ export type CheckinValidation =
   | { readonly ok: false; readonly message: string };
 
 /**
- * Validate an appointment for check-in (date + status).
+ * Validate an appointment for kiosk self-check-in.
+ *
+ * Mirrors the Nexus backend filter (queue.service.ts:871-873): hard-block
+ * cancelled / completed / no_show. Same-day check-in is the default path;
+ * appointments previously deferred at the counter (appt_status='DEFERRED')
+ * may be re-checked-in within a 14-day window without restating the booking.
  */
 export function validateAppointment(appointment: AppointmentWithService): CheckinValidation {
   const rejected: ReadonlyArray<string> = ['cancelled', 'completed', 'no_show'];
@@ -115,11 +120,22 @@ export function validateAppointment(appointment: AppointmentWithService): Checki
     };
   }
 
+  if (appointment.appt_status === 'DEFERRED') {
+    const cutoff = daysAgoSGT(14);
+    if (appointment.appointment_date < cutoff) {
+      return {
+        ok: false,
+        message: 'Deferred appointment is older than 14 days. Please see the receptionist.',
+      };
+    }
+    return { ok: true };
+  }
+
   const today = todaySGT();
   if (appointment.appointment_date !== today) {
     return {
       ok: false,
-      message: `Appointment is for ${appointment.appointment_date}, not today.`,
+      message: `Appointment is for ${appointment.appointment_date}. Please come on your scheduled day.`,
     };
   }
 

@@ -104,6 +104,12 @@ export function resolveServiceLabel(serviceId: string): string {
   return 'Contract Verification';
 }
 
+/** Direct Hire service_id check */
+export const DH_SERVICE_ID = SERVICE_ID_MAP['DH']!;
+export function isDhAppointment(serviceId: string): boolean {
+  return serviceId === DH_SERVICE_ID;
+}
+
 /** OFW Transaction type options for walk-in registration */
 export const OFW_TRANS_OPTIONS = [
   'Change in Employer',
@@ -151,5 +157,12 @@ export function detectScanType(value: string): 'APPOINTMENT' | 'FRA' | 'UNKNOWN'
 export function todaySGT(): string {
   const now = new Date();
   const sgt = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  return sgt.toISOString().slice(0, 10);
+}
+
+/** Date N days ago as YYYY-MM-DD in SGT */
+export function daysAgoSGT(days: number): string {
+  const sgt = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  sgt.setUTCDate(sgt.getUTCDate() - days);
   return sgt.toISOString().slice(0, 10);
 }

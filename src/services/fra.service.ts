@@ -6,7 +6,7 @@
  */
 
 import { getSupabaseWriter } from './supabase.client';
-import { todaySGT } from '../lib/constants';
+import { todaySGT, daysAgoSGT } from '../lib/constants';
 import type { FraRegistrationRow, FraGroup } from '../schemas/fra.schema';
 
 const FRA_FIELDS = `
@@ -14,14 +14,6 @@ const FRA_FIELDS = `
   agency_email, agency_personnel, status,
   arrived_at, staff_notes, created_at, updated_at
 `;
-
-/** Calculate date 14 days ago in SGT (YYYY-MM-DD). */
-function fourteenDaysAgoSGT(): string {
-  const now = new Date();
-  const sgt = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-  sgt.setUTCDate(sgt.getUTCDate() - 14);
-  return sgt.toISOString().slice(0, 10);
-}
 
 export interface LookupOptions {
   /** Strict mode (kiosk): today + 14 days back, no future. Default true. */
@@ -49,7 +41,7 @@ export async function lookupByRef(
 
   if (strict) {
     const today = todaySGT();
-    const cutoffDate = fourteenDaysAgoSGT();
+    const cutoffDate = daysAgoSGT(14);
     query = query.gte('appointment_date', cutoffDate).lte('appointment_date', today);
   }
 

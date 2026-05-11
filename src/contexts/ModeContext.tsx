@@ -41,6 +41,9 @@ export function ModeProvider({ children }: { readonly children: ReactNode }) {
         if (s.supabaseUrl && s.supabaseServiceKey) {
           initSupabaseService(s.supabaseUrl, s.supabaseServiceKey);
         }
+
+        // Apply kiosk window lock if KIOSK mode was remembered from a prior session
+        if (s.mode) window.electronAPI.switchMode(s.mode);
       } catch (err) {
         console.error('Failed to load settings:', err);
       } finally {
@@ -60,6 +63,7 @@ export function ModeProvider({ children }: { readonly children: ReactNode }) {
   const setMode = useCallback(async (mode: AppMode, remember: boolean) => {
     await window.electronAPI.saveSettings({ mode, rememberMode: remember });
     setSettings((prev) => (prev ? { ...prev, mode, rememberMode: remember } : prev));
+    if (mode) window.electronAPI.switchMode(mode);
   }, []);
 
   const updateSettings = useCallback(async (partial: Partial<KioskSettings>) => {

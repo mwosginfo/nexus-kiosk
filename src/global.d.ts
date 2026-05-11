@@ -7,7 +7,7 @@ interface TicketData {
 
 interface QrTicketData {
   readonly title: string;
-  readonly qrDataUrl: string;
+  readonly qrText: string;
   readonly pra: string;
   readonly fra: string;
   readonly contractCount: number;

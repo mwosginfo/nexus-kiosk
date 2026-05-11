@@ -2,11 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Kiosk mode: prevent text selection and context menu */
+/* Kiosk mode: prevent text selection, context menu, and double-tap zoom delay */
 .kiosk-mode {
   user-select: none;
   -webkit-user-select: none;
   cursor: default;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: contain;
 }
 
 /* Large touch targets for kiosk */
@@ -14,7 +17,28 @@
   @apply min-h-[48px] min-w-[48px];
 }
 
-/* Queue number display */
-.queue-number-xl {
-  @apply text-7xl font-bold font-mono tracking-widest;
+/* Brand accent strip — used on splash + success/error footers */
+.brand-strip {
+  height: 6px;
+  background: linear-gradient(
+    90deg,
+    #b02f47 0%,
+    #b02f47 33.33%,
+    #2a4090 33.33%,
+    #2a4090 66.66%,
+    #f4dd4c 66.66%,
+    #f4dd4c 100%
+  );
+}
+
+/* Honor prefers-reduced-motion globally — disables Tailwind's animate-* utilities */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
