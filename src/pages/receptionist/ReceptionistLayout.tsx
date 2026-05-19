@@ -13,11 +13,13 @@ import { todaySGT } from '../../lib/constants';
 import * as queueService from '../../services/queue.service';
 import type { AppointmentWithService } from '../../schemas/appointment.schema';
 import type { FraRegistrationRow } from '../../schemas/fra.schema';
+import type { SubmissionRow } from '../../schemas/submission.schema';
 import mwoLogo from '../../assets/mwo_logo.png';
 
 type SelectedItem =
   | { readonly type: 'appointment'; readonly data: AppointmentWithService }
-  | { readonly type: 'fra'; readonly data: FraRegistrationRow };
+  | { readonly type: 'fra'; readonly data: FraRegistrationRow }
+  | { readonly type: 'submission'; readonly data: SubmissionRow };
 
 interface QueueStats {
   readonly checkedIn: number;
@@ -37,7 +39,7 @@ export function ReceptionistLayout() {
 
   const autoPrint = settings?.autoPrint ?? true;
 
-  // ─── Fetch queue stats ─────────────────────────────────────────────────
+  // ─── Fetch queue stats ────────────────────────────────────────────
   const fetchStats = useCallback(async () => {
     try {
       const supabase = getSupabaseWriter();
@@ -69,7 +71,7 @@ export function ReceptionistLayout() {
     return () => clearInterval(interval);
   }, [fetchStats]);
 
-  // ─── Handlers ──────────────────────────────────────────────────────────
+  // ─── Handlers ───────────────────────────────────────────────────────
   function handleCheckinComplete(queueNumber: string, name: string) {
     setLastCheckin({ queueNumber, name });
     setSelected(null);
@@ -103,6 +105,12 @@ export function ReceptionistLayout() {
       setOwwaLoading(false);
     }
   }
+
+  const selectedId =
+    selected?.type === 'appointment' ? selected.data.id
+    : selected?.type === 'fra' ? selected.data.id
+    : selected?.type === 'submission' ? selected.data.ref_code
+    : null;
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -193,13 +201,8 @@ export function ReceptionistLayout() {
           <SearchPanel
             onSelectAppointment={(a) => setSelected({ type: 'appointment', data: a })}
             onSelectFra={(f) => setSelected({ type: 'fra', data: f })}
-            selectedId={
-              selected?.type === 'appointment'
-                ? selected.data.id
-                : selected?.type === 'fra'
-                ? selected.data.id
-                : null
-            }
+            onSelectSubmission={(s) => setSelected({ type: 'submission', data: s })}
+            selectedId={selectedId}
           />
         </div>
 

@@ -6,11 +6,13 @@ import { FraCard } from '../../components/FraCard';
 import { useScanner } from '../../hooks/useScanner';
 import { todaySGT, detectScanType } from '../../lib/constants';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faUsers, faBuilding, faCalendarDay } from '@fortawesome/free-solid-svg-icons';
+import { faUsers, faBuilding, faCalendarDay, faFileSignature } from '@fortawesome/free-solid-svg-icons';
 import * as appointmentService from '../../services/appointment.service';
 import * as fraService from '../../services/fra.service';
+import * as submissionService from '../../services/submission.service';
 import type { AppointmentWithService } from '../../schemas/appointment.schema';
 import type { FraRegistrationRow, FraGroup } from '../../schemas/fra.schema';
+import type { SubmissionRow } from '../../schemas/submission.schema';
 
 type SearchTab = 'regular' | 'fra' | 'browse';
 type SearchMode = 'ref_code' | 'phone';
@@ -19,10 +21,16 @@ type BrowseMode = 'appointments' | 'fra';
 interface SearchPanelProps {
   readonly onSelectAppointment: (appt: AppointmentWithService) => void;
   readonly onSelectFra: (fra: FraRegistrationRow) => void;
+  readonly onSelectSubmission: (submission: SubmissionRow) => void;
   readonly selectedId: string | null;
 }
 
-export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: SearchPanelProps) {
+export function SearchPanel({
+  onSelectAppointment,
+  onSelectFra,
+  onSelectSubmission,
+  selectedId,
+}: SearchPanelProps) {
   const [tab, setTab] = useState<SearchTab>('regular');
   const [searchMode, setSearchMode] = useState<SearchMode>('ref_code');
   const [searchValue, setSearchValue] = useState('');
@@ -31,6 +39,7 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
   const [error, setError] = useState('');
   const [appointments, setAppointments] = useState<readonly AppointmentWithService[]>([]);
   const [fraResults, setFraResults] = useState<readonly FraRegistrationRow[]>([]);
+  const [submissionResults, setSubmissionResults] = useState<readonly SubmissionRow[]>([]);
 
   // Browse state
   const [browseMode, setBrowseMode] = useState<BrowseMode>('appointments');
@@ -88,6 +97,7 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
     setError('');
     setAppointments([]);
     setFraResults([]);
+    setSubmissionResults([]);
 
     try {
       if (activeTab === 'fra') {
@@ -95,9 +105,17 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
         setFraResults(result ? [result] : []);
         if (!result) setError('No FRA registration found');
       } else if (searchMode === 'ref_code') {
-        const result = await appointmentService.lookupByRefCode(q);
-        setAppointments(result ? [result] : []);
-        if (!result) setError('No appointment found');
+        // Submission refs have an embedded hyphen (e.g. "HSW2601-FM00CD");
+        // route them to the submissions table directly.
+        if (detectScanType(q) === 'SUBMISSION') {
+          const result = await submissionService.lookupByRefCode(q);
+          setSubmissionResults(result ? [result] : []);
+          if (!result) setError('No accreditation submission found');
+        } else {
+          const result = await appointmentService.lookupByRefCode(q);
+          setAppointments(result ? [result] : []);
+          if (!result) setError('No appointment found');
+        }
       } else {
         const results = await appointmentService.lookupByPhone(q, dateRef.current);
         setAppointments(results);
@@ -110,7 +128,9 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
     }
   }
 
-  // QR scanner
+  // QR scanner — FRA scans switch to the FRA tab; everything else lands on
+  // the regular tab and doSearch picks submission vs appointment from the
+  // ref pattern.
   useScanner({
     onScan: (scanned) => {
       const scanType = detectScanType(scanned);
@@ -126,6 +146,7 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
     setTab(newTab);
     setAppointments([]);
     setFraResults([]);
+    setSubmissionResults([]);
     setBrowseAppointments([]);
     setBrowseFraResults([]);
     setError('');
@@ -166,7 +187,7 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
         </button>
       </div>
 
-      {/* ─── Browse mode ───────────────────────────────────────────────── */}
+      {/* ─── Browse mode ─────────────────────────────────────────────── */}
       {tab === 'browse' && (
         <>
           {/* Browse sub-tabs: Appointments vs FRA */}
@@ -237,7 +258,7 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
         </>
       )}
 
-      {/* ─── Scan / Search mode ────────────────────────────────────────── */}
+      {/* ─── Scan / Search mode ─────────────────────────────────────────── */}
       {tab !== 'browse' && (
         <>
           <div className="flex items-center gap-3">
@@ -274,7 +295,7 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
                   ? 'Scan or enter transaction ref...'
                   : searchMode === 'phone'
                     ? 'Enter phone number...'
-                    : 'Scan or enter ref code...'
+                    : 'Scan or enter ref code (appointment or accreditation)...'
               }
               className="border-gray-200 focus:border-teal-500 focus:ring-teal-400/30"
             />
@@ -298,6 +319,14 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
                 onClick={() => onSelectAppointment(a)}
               />
             ))}
+            {tab === 'regular' && submissionResults.map((s) => (
+              <SubmissionCardInline
+                key={s.ref_code}
+                submission={s}
+                selected={selectedId === s.ref_code}
+                onClick={() => onSelectSubmission(s)}
+              />
+            ))}
             {tab === 'fra' && fraResults.map((f) => (
               <FraCard
                 key={f.id}
@@ -310,5 +339,43 @@ export function SearchPanel({ onSelectAppointment, onSelectFra, selectedId }: Se
         </>
       )}
     </div>
+  );
+}
+
+// ─── Inline submission card ────────────────────────────────────────────
+
+interface SubmissionCardInlineProps {
+  readonly submission: SubmissionRow;
+  readonly selected: boolean;
+  readonly onClick: () => void;
+}
+
+function SubmissionCardInline({ submission, selected, onClick }: SubmissionCardInlineProps) {
+  const name = submissionService.resolveSubmissionName(submission) || 'Accreditation client';
+  const status = submission.status ?? 'pending';
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`w-full text-left rounded-xl border p-3 transition-colors ${
+        selected
+          ? 'border-violet-400 bg-violet-50'
+          : 'border-gray-200 bg-white hover:border-violet-200'
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <div className="mt-1 h-9 w-9 flex items-center justify-center rounded-lg bg-violet-100 text-violet-600">
+          <FontAwesomeIcon icon={faFileSignature} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-gray-800 truncate">{name}</p>
+          <p className="text-xs text-gray-500 font-mono">{submission.ref_code}</p>
+          <p className="text-[11px] text-gray-400 uppercase mt-1">
+            Accreditation · {status}
+            {submission.trans_status ? ` · ${submission.trans_status}` : ''}
+          </p>
+        </div>
+      </div>
+    </button>
   );
 }

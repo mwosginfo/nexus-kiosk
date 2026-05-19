@@ -10,13 +10,16 @@ import {
 import * as appointmentService from '../../services/appointment.service';
 import * as fraService from '../../services/fra.service';
 import * as queueService from '../../services/queue.service';
+import * as submissionService from '../../services/submission.service';
 import { FraPickupSubmitModal } from './FraPickupSubmitModal';
 import type { AppointmentWithService } from '../../schemas/appointment.schema';
 import type { FraRegistrationRow } from '../../schemas/fra.schema';
+import type { SubmissionRow } from '../../schemas/submission.schema';
 
 type SelectedItem =
   | { readonly type: 'appointment'; readonly data: AppointmentWithService }
-  | { readonly type: 'fra'; readonly data: FraRegistrationRow };
+  | { readonly type: 'fra'; readonly data: FraRegistrationRow }
+  | { readonly type: 'submission'; readonly data: SubmissionRow };
 
 interface CheckinPanelProps {
   readonly selected: SelectedItem | null;
@@ -33,13 +36,20 @@ interface PendingFraDispatch {
 
 const DH_SERVICE_ID = SERVICE_ID_MAP['DH'];
 
+/** Status values that route to pickup-mode in the new Supabase-reduction model. */
+const APPOINTMENT_PICKUP_STATUSES: ReadonlyArray<string> = [
+  'submitted',
+  'or_issued',
+  'completed',
+];
+
 function isDhAppointment(serviceId: string): boolean {
   return serviceId === DH_SERVICE_ID;
 }
 
 function isWithin14DaysBack(dateStr: string): boolean {
   const today = todaySGT();
-  if (dateStr > today) return false; // future, not past
+  if (dateStr > today) return false;
   const sgtNow = new Date(new Date().getTime() + 8 * 60 * 60 * 1000);
   sgtNow.setUTCDate(sgtNow.getUTCDate() - 14);
   const cutoff = sgtNow.toISOString().slice(0, 10);
@@ -56,7 +66,7 @@ export function CheckinPanel({
   const [error, setError] = useState('');
   const [pendingFra, setPendingFra] = useState<PendingFraDispatch | null>(null);
 
-  // ─── Print + complete helpers ────────────────────────────────────────────
+  // ─── Print + complete helpers ───────────────────────────────────────
 
   function maybePrint(queueNumber: string, name: string, serviceLabel: string) {
     if (!autoPrint) return;
@@ -67,7 +77,7 @@ export function CheckinPanel({
     }).catch((err: unknown) => console.error('[CheckinPanel] Print error:', err));
   }
 
-  // ─── Appointment dispatch ────────────────────────────────────────────────
+  // ─── Appointment dispatch ─────────────────────────────────────────────────
 
   async function checkinAppointment(
     appt: AppointmentWithService,
@@ -78,24 +88,18 @@ export function CheckinPanel({
     const isPast = appt.appointment_date < today;
     const isDh = isDhAppointment(appt.service_id);
     const apptStatus = appt.appt_status; // ARRIVED, DEFERRED, etc.
+    const status = (appt.status ?? '').toLowerCase();
 
     // Block terminal/abnormal statuses
-    const rejected = ['cancelled', 'no_show'];
-    if (rejected.includes(appt.status)) {
-      throw new Error(`This appointment is ${appt.status} and cannot be checked in.`);
-    }
-    // 'completed' main status: only DH past+ARRIVED makes sense (pickup); otherwise reject
-    if (appt.status === 'completed' && !(isDh && apptStatus === 'ARRIVED' && isPast)) {
-      throw new Error('This appointment is completed and cannot be checked in.');
+    const rejected = ['cancelled', 'no_show', 'released'];
+    if (rejected.includes(status)) {
+      throw new Error(`This appointment is ${status} and cannot be checked in.`);
     }
 
-    // Future >14 days
+    // Future > 14 days
     if (isFuture && !isWithinDaysAhead(appt.appointment_date, 14)) {
       throw new Error(`Appointment is for ${appt.appointment_date}, which is more than 14 days ahead.`);
     }
-
-    const dup = await queueService.checkDuplicate(appt.ref_code);
-    if (dup) throw new Error(`Already checked in as Q#${dup.displayNumber}.`);
 
     const serviceInfo = await appointmentService.lookupServiceInfo(appt.service_id);
     const name = [appt.ofw_fname, appt.ofw_mname, appt.ofw_lname]
@@ -103,8 +107,31 @@ export function CheckinPanel({
       .join(' ');
     const serviceLabel = resolveServiceLabel(appt.service_id);
 
+    // ── New pickup-mode (status-driven): client returning for OR ──
+    if (APPOINTMENT_PICKUP_STATUSES.includes(status)) {
+      const dup = await queueService.checkDuplicateForPickup(appt.ref_code);
+      if (dup) throw new Error(`Pickup already issued as Q#${dup.displayNumber}.`);
+
+      const assignment = await queueService.checkinAndAssignQueue({
+        refCode: appt.ref_code,
+        appointmentType: 'APPOINTMENT',
+        queueSeries: serviceInfo.series,
+        serviceType: serviceInfo.serviceType,
+        clientName: name,
+        clientEmail: appt.client_email,
+        appointmentId: appt.id,
+        transactionRef: appt.ref_code,
+        remarks: 'PICKUP',
+      });
+      onCheckinComplete(assignment.displayNumber, name);
+      maybePrint(assignment.displayNumber, name, `PICKUP - ${serviceLabel}`);
+      return;
+    }
+
     // ── Future flow: Approve & Check In as Walk-in (W600 series) ──
     if (isFuture || forceWalkIn) {
+      const dup = await queueService.checkDuplicate(appt.ref_code);
+      if (dup) throw new Error(`Already checked in as Q#${dup.displayNumber}.`);
       const assignment = await queueService.checkinAndAssignQueue({
         refCode: appt.ref_code,
         appointmentType: 'WALKIN',
@@ -122,8 +149,10 @@ export function CheckinPanel({
       return;
     }
 
-    // ── Past + DH pickup (any past date, appt_status='ARRIVED') ──
+    // ── Past + DH pickup (legacy: any past date, appt_status='ARRIVED') ──
     if (isPast && isDh && apptStatus === 'ARRIVED') {
+      const dup = await queueService.checkDuplicateForPickup(appt.ref_code);
+      if (dup) throw new Error(`Pickup already issued as Q#${dup.displayNumber}.`);
       const assignment = await queueService.checkinAndAssignQueue({
         refCode: appt.ref_code,
         appointmentType: 'APPOINTMENT',
@@ -135,9 +164,8 @@ export function CheckinPanel({
         transactionRef: appt.ref_code,
         remarks: 'PICKUP',
       });
-      // No appointment update needed — status already reflects pickup-ready state
       onCheckinComplete(assignment.displayNumber, name);
-      maybePrint(assignment.displayNumber, name, `${serviceLabel} (Pickup)`);
+      maybePrint(assignment.displayNumber, name, `PICKUP - ${serviceLabel}`);
       return;
     }
 
@@ -146,6 +174,8 @@ export function CheckinPanel({
       if (!isWithin14DaysBack(appt.appointment_date)) {
         throw new Error(`Deferred appointment is older than 14 days (${appt.appointment_date}).`);
       }
+      const dup = await queueService.checkDuplicate(appt.ref_code);
+      if (dup) throw new Error(`Already checked in as Q#${dup.displayNumber}.`);
       const assignment = await queueService.checkinAndAssignQueue({
         refCode: appt.ref_code,
         appointmentType: 'APPOINTMENT',
@@ -159,11 +189,13 @@ export function CheckinPanel({
       });
       appointmentService.markArrivedFromDeferred(appt.id).catch(() => {});
       onCheckinComplete(assignment.displayNumber, name);
-      maybePrint(assignment.displayNumber, name, `${serviceLabel} (Deferred)`);
+      maybePrint(assignment.displayNumber, name, serviceLabel);
       return;
     }
 
     // ── Default flow: today (or past CV/OWWA) → normal check-in ──
+    const dup = await queueService.checkDuplicate(appt.ref_code);
+    if (dup) throw new Error(`Already checked in as Q#${dup.displayNumber}.`);
     const assignment = await queueService.checkinAndAssignQueue({
       refCode: appt.ref_code,
       appointmentType: 'APPOINTMENT',
@@ -179,7 +211,7 @@ export function CheckinPanel({
     maybePrint(assignment.displayNumber, name, serviceLabel);
   }
 
-  // ─── FRA dispatch ────────────────────────────────────────────────────────
+  // ─── FRA dispatch ─────────────────────────────────────────────────────────
 
   async function checkinFra(fra: FraRegistrationRow): Promise<void> {
     const today = todaySGT();
@@ -189,12 +221,14 @@ export function CheckinPanel({
     if (fra.status === 'cancelled') {
       throw new Error('This FRA registration is cancelled and cannot be checked in.');
     }
+    if (fra.status === 'moved') {
+      throw new Error('This FRA group has been split. Please use the new printed QR.');
+    }
 
-    const dup = await queueService.checkDuplicate(fra.transaction_ref);
-    if (dup) throw new Error(`Already checked in as Q#${dup.displayNumber}.`);
-
-    // ── Future or today: normal A001 flow ──
+    // ── Future or today: normal A001 flow (first-visit dup check) ──
     if (isFuture || !isPast) {
+      const dup = await queueService.checkDuplicate(fra.transaction_ref);
+      if (dup) throw new Error(`Already checked in as Q#${dup.displayNumber}.`);
       await issueFraQueue(fra, fra.transaction_ref, isFuture ? 'FUTURE_APPROVED' : undefined);
       fraService.markArrived(fra.transaction_ref).catch(() => {});
       return;
@@ -206,12 +240,21 @@ export function CheckinPanel({
 
     const hasPickup = analysis.pickupContracts.length > 0;
     const hasDeferred = analysis.deferredContracts.length > 0;
+    const hasMoved = analysis.movedContracts.length > 0;
+    const onlyMoved =
+      hasMoved &&
+      !hasPickup &&
+      !hasDeferred &&
+      analysis.otherContracts.length === 0;
 
-    // Mixed: prompt receptionist
+    if (onlyMoved) {
+      throw new Error('This FRA group has been split. Please use the new printed QR.');
+    }
+
+    // Mixed pickup + deferred: prompt receptionist
     if (hasPickup && hasDeferred) {
-      // Validate deferred 14-day window if present
       if (!isWithin14DaysBack(fra.appointment_date)) {
-        // Past >14 days — only pickup is allowed, skip modal
+        // Past > 14 days — only pickup is allowed, skip modal
         await dispatchFraPickup(fra, analysis.pickupContracts);
         return;
       }
@@ -237,6 +280,8 @@ export function CheckinPanel({
     }
 
     // No special state → default check-in
+    const dup = await queueService.checkDuplicate(fra.transaction_ref);
+    if (dup) throw new Error(`Already checked in as Q#${dup.displayNumber}.`);
     await issueFraQueue(fra, fra.transaction_ref);
     fraService.markArrived(fra.transaction_ref).catch(() => {});
   }
@@ -245,6 +290,8 @@ export function CheckinPanel({
     fra: FraRegistrationRow,
     pickupContracts: readonly FraRegistrationRow[],
   ): Promise<void> {
+    const dup = await queueService.checkDuplicateForPickup(fra.transaction_ref);
+    if (dup) throw new Error(`Pickup already issued as Q#${dup.displayNumber}.`);
     await issueFraQueue(fra, fra.transaction_ref, 'PICKUP', '(Pickup)');
     fraService.markPickedUp(pickupContracts.map((c) => c.id)).catch(() => {});
   }
@@ -253,6 +300,8 @@ export function CheckinPanel({
     fra: FraRegistrationRow,
     deferredContracts: readonly FraRegistrationRow[],
   ): Promise<void> {
+    const dup = await queueService.checkDuplicate(fra.transaction_ref);
+    if (dup) throw new Error(`Already checked in as Q#${dup.displayNumber}.`);
     await issueFraQueue(fra, fra.transaction_ref, 'DEFERRED', '(Deferred)');
     fraService.clearStaffNotes(deferredContracts.map((c) => c.id)).catch(() => {});
   }
@@ -278,7 +327,58 @@ export function CheckinPanel({
     maybePrint(assignment.displayNumber, fra.fra, label);
   }
 
-  // ─── Confirm callback for the FRA pickup/submit modal ────────────────────
+  // ─── Submission (Accreditation) dispatch ────────────────────────────────────
+
+  async function checkinSubmission(submission: SubmissionRow): Promise<void> {
+    if (submissionService.isBlocked(submission)) {
+      throw new Error(
+        `This accreditation submission is ${submission.status ?? 'closed'} and cannot be checked in.`,
+      );
+    }
+    const isPickup = submissionService.isPickupEligible(submission);
+    const isFirstVisit = !isPickup && submissionService.isFirstVisitEligible(submission);
+
+    if (!isPickup && !isFirstVisit) {
+      throw new Error(
+        `This submission is in status "${submission.status ?? 'unknown'}" and cannot be checked in right now.`,
+      );
+    }
+
+    const refCode = submission.ref_code;
+    const name = submissionService.resolveSubmissionName(submission) || 'Accreditation Client';
+
+    const dup = isPickup
+      ? await queueService.checkDuplicateForPickup(refCode)
+      : await queueService.checkDuplicate(refCode);
+    if (dup) {
+      throw new Error(
+        `${isPickup ? 'Pickup' : 'Check-in'} already issued as Q#${dup.displayNumber}.`,
+      );
+    }
+
+    const assignment = await queueService.checkinAndAssignQueue({
+      refCode,
+      appointmentType: 'APPOINTMENT',
+      queueSeries: 'REGULAR',
+      serviceType: 'ACCREDITATION',
+      clientName: name,
+      transactionRef: refCode,
+      remarks: isPickup ? 'PICKUP' : undefined,
+    });
+
+    if (isFirstVisit) {
+      submissionService.markArrived(refCode).catch(() => {});
+    }
+
+    onCheckinComplete(assignment.displayNumber, name);
+    maybePrint(
+      assignment.displayNumber,
+      name,
+      isPickup ? 'PICKUP - ACCREDITATION' : 'ACCREDITATION',
+    );
+  }
+
+  // ─── Confirm callback for the FRA pickup/submit modal ─────────────────────────
 
   async function handleFraModalConfirm(choice: { pickup: boolean; submit: boolean }): Promise<void> {
     if (!pendingFra) return;
@@ -288,11 +388,9 @@ export function CheckinPanel({
     setError('');
 
     try {
-      // Issue pickup queue first (if chosen)
       if (choice.pickup) {
         await dispatchFraPickup(fra, pickupContracts);
       }
-      // Then submit/deferred queue (if chosen) — this becomes the second queue number
       if (choice.submit) {
         await dispatchFraDeferred(fra, deferredContracts);
       }
@@ -303,7 +401,7 @@ export function CheckinPanel({
     }
   }
 
-  // ─── Main click handler ──────────────────────────────────────────────────
+  // ─── Main click handler ──────────────────────────────────────────────────────
 
   async function handleCheckin(forceWalkIn = false): Promise<void> {
     if (!selected) return;
@@ -313,8 +411,10 @@ export function CheckinPanel({
     try {
       if (selected.type === 'appointment') {
         await checkinAppointment(selected.data, forceWalkIn);
-      } else {
+      } else if (selected.type === 'fra') {
         await checkinFra(selected.data);
+      } else {
+        await checkinSubmission(selected.data);
       }
     } catch (err) {
       const raw = err instanceof Error ? err.message : 'Check-in failed';
@@ -338,7 +438,7 @@ export function CheckinPanel({
     }
   }
 
-  // ─── Render: empty state ────────────────────────────────────────────────
+  // ─── Render: empty state ──────────────────────────────────────────────────
   if (!selected) {
     if (lastCheckin) {
       return (
@@ -361,22 +461,95 @@ export function CheckinPanel({
     );
   }
 
-  // ─── Render: appointment detail ─────────────────────────────────────────
+  // ─── Render: submission detail ──────────────────────────────────────────────
+  if (selected.type === 'submission') {
+    const s = selected.data;
+    const name = submissionService.resolveSubmissionName(s) || 'Accreditation client';
+    const isBlocked = submissionService.isBlocked(s);
+    const isPickup = submissionService.isPickupEligible(s);
+    const isFirstVisit = !isPickup && submissionService.isFirstVisitEligible(s);
+
+    return (
+      <div className="space-y-6">
+        <h2 className="text-xl font-bold text-gray-800">Accreditation Submission</h2>
+
+        {isPickup && (
+          <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3">
+            <strong>Pickup:</strong> Submission is ready. Issuing pickup queue number.
+          </div>
+        )}
+        {isFirstVisit && (
+          <div className="text-sm text-violet-700 bg-violet-50 border border-violet-200 rounded-lg px-4 py-3">
+            <strong>First visit:</strong> New accreditation submission. Issuing arrived queue number.
+          </div>
+        )}
+        {isBlocked && (
+          <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+            This submission is <strong>{s.status}</strong> and cannot be checked in.
+          </div>
+        )}
+
+        <div className="bg-white rounded-xl border p-6 space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <p className="text-xs text-gray-400 uppercase">Agency / Client</p>
+              <p className="text-lg font-semibold text-gray-800">{name}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400 uppercase">Ref Code</p>
+              <p className="text-lg font-mono text-gray-800">{s.ref_code}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400 uppercase">Status</p>
+              <p className="text-gray-700">{s.status ?? 'pending'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400 uppercase">Trans Status</p>
+              <p className="text-gray-700">{s.trans_status ?? '—'}</p>
+            </div>
+          </div>
+        </div>
+
+        {error && <p className="text-sm text-red-500 bg-red-50 rounded-lg px-4 py-3">{error}</p>}
+
+        {!isBlocked && (isPickup || isFirstVisit) && (
+          <button
+            onClick={() => void handleCheckin()}
+            disabled={checking}
+            className={`w-full py-4 text-lg font-bold text-white rounded-xl disabled:opacity-50 transition-colors ${
+              isPickup ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-violet-600 hover:bg-violet-700'
+            }`}
+          >
+            {checking
+              ? 'Checking In...'
+              : isPickup
+                ? 'Check In (Pickup) & Print Ticket'
+                : 'Check In & Print Ticket'}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // ─── Render: appointment detail ────────────────────────────────────────────
   if (selected.type === 'appointment') {
     const a = selected.data;
     const today = todaySGT();
     const name = [a.ofw_fname, a.ofw_mname, a.ofw_lname].filter(Boolean).join(' ');
     const serviceLabel = a.services?.name ?? resolveServiceLabel(a.service_id);
+    const status = (a.status ?? '').toLowerCase();
 
     const isNotToday = a.appointment_date !== today;
     const isFuture = isFutureDate(a.appointment_date);
     const isPast = a.appointment_date < today;
     const isDh = isDhAppointment(a.service_id);
+    const isNewPickup = APPOINTMENT_PICKUP_STATUSES.includes(status);
     const isTerminal =
-      ['cancelled', 'no_show'].includes(a.status) ||
-      (a.status === 'completed' && !(isDh && a.appt_status === 'ARRIVED' && isPast));
+      ['cancelled', 'no_show', 'released'].includes(status) ||
+      (status === 'completed' && !isNewPickup && !(isDh && a.appt_status === 'ARRIVED' && isPast));
     const isDhPickup = isPast && isDh && a.appt_status === 'ARRIVED';
     const isDhDeferred = isPast && isDh && a.appt_status === 'DEFERRED';
+    const showPickupBanner = isNewPickup || isDhPickup;
 
     return (
       <div className="space-y-6">
@@ -389,9 +562,9 @@ export function CheckinPanel({
           </div>
         )}
 
-        {isDhPickup && (
+        {showPickupBanner && (
           <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3">
-            <strong>Pickup:</strong> Past DH appointment marked ARRIVED. Issuing pickup queue number.
+            <strong>Pickup:</strong> Client is returning for OR or documents. Issuing pickup queue number.
           </div>
         )}
 
@@ -401,7 +574,7 @@ export function CheckinPanel({
           </div>
         )}
 
-        {isNotToday && !isFuture && !isDhPickup && !isDhDeferred && (
+        {isNotToday && !isFuture && !showPickupBanner && !isDhDeferred && (
           <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
             This appointment was for <strong>{a.appointment_date}</strong> (past date).
           </div>
@@ -449,7 +622,7 @@ export function CheckinPanel({
         {error && <p className="text-sm text-red-500 bg-red-50 rounded-lg px-4 py-3">{error}</p>}
 
         {/* Future: Approve & Check In as Walk-in */}
-        {isFuture && !isTerminal && (
+        {isFuture && !isTerminal && !isNewPickup && (
           <button
             onClick={() => void handleCheckin(true)}
             disabled={checking}
@@ -459,16 +632,18 @@ export function CheckinPanel({
           </button>
         )}
 
-        {/* Today / past: normal check-in */}
+        {/* Today / past / pickup: normal check-in */}
         {!isFuture && !isTerminal && (
           <button
             onClick={() => void handleCheckin()}
             disabled={checking}
-            className="w-full py-4 text-lg font-bold text-white bg-teal-500 rounded-xl hover:bg-teal-600 disabled:opacity-50 transition-colors"
+            className={`w-full py-4 text-lg font-bold text-white rounded-xl disabled:opacity-50 transition-colors ${
+              showPickupBanner ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-teal-500 hover:bg-teal-600'
+            }`}
           >
             {checking
               ? 'Checking In...'
-              : isDhPickup
+              : showPickupBanner
                 ? 'Check In (Pickup) & Print Ticket'
                 : isDhDeferred
                   ? 'Check In (Deferred) & Print Ticket'
@@ -479,12 +654,12 @@ export function CheckinPanel({
     );
   }
 
-  // ─── Render: FRA detail ────────────────────────────────────────────────
+  // ─── Render: FRA detail ───────────────────────────────────────────────────
   const f = selected.data;
   const today = todaySGT();
   const isFraFuture = f.appointment_date > today;
   const isFraPast = f.appointment_date < today;
-  const isFraTerminal = f.status === 'cancelled';
+  const isFraTerminal = f.status === 'cancelled' || f.status === 'moved';
 
   return (
     <div className="space-y-6">
@@ -501,15 +676,21 @@ export function CheckinPanel({
         </div>
       )}
 
-      {isFraPast && (
+      {isFraPast && !isFraTerminal && (
         <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
           Past appointment. Pickup or deferred contracts will be detected automatically.
         </div>
       )}
 
-      {isFraTerminal && (
+      {f.status === 'moved' && (
         <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-          This FRA registration is <strong>{f.status}</strong> and cannot be checked in.
+          This FRA group has been split. Please ask the client for their new printed QR.
+        </div>
+      )}
+
+      {f.status === 'cancelled' && (
+        <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+          This FRA registration is <strong>cancelled</strong> and cannot be checked in.
         </div>
       )}
 
