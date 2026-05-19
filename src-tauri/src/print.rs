@@ -1,10 +1,10 @@
 //! ESC/POS thermal printing for 80mm queue tickets.
 //!
-//! Layout mirrors the legacy Electron HTML print (80mm @page, 72mm content):
-//!   header (1x bold)
+//! Layout mirrors the Nexus repo thermal-print spec (80mm @page, 72mm content):
+//!   header        (1x bold)
 //!   ──────────── divider 42ch ─────────────
 //!   QUEUE NUMBER  (6x6 bold — matches the 56pt headline in HTML)
-//!   service type  (2x bold)
+//!   service type  (2x bold)  ← normalized to canonical label
 //!   client name   (1x bold)
 //!   ──────────── divider 42ch ─────────────
 //!   date · time   (1x)
@@ -13,6 +13,16 @@
 //! Bytes are crafted by hand (escape sequences are simple enough that pulling
 //! in a builder crate isn't worth the dependency) and sent to the configured
 //! Windows printer via the `printers` crate, which wraps winspool RAW jobs.
+//!
+//! Service-type canonicalization (matches Nexus repo public-facing labels):
+//!   skilled-cv, mdw-cv  → CONTRACT VERIFICATION
+//!   dh                  → DIRECT HIRE
+//!   owwa                → OWWA
+//!   accreditation       → ACCREDITATION
+//!   fra-registration    → FRA REGISTRATION
+//! Pickup-prefixed (`PICKUP - <something>`) and parenthetical-suffixed
+//! (`<something> (Lost Booking)`) forms preserve their wrappers around the
+//! normalized base.
 
 use chrono::{FixedOffset, Utc};
 use printers::common::base::job::PrinterJobOptions;
@@ -69,6 +79,60 @@ fn sgt_now() -> (String, String) {
     (now.format("%d %b %Y").to_string(), now.format("%H:%M").to_string())
 }
 
+/// Map whatever the React layer passes into the canonical ticket label.
+/// Preserves a leading `PICKUP - ` prefix and any parenthetical suffix.
+fn normalize_service_label(input: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let upper = trimmed.to_uppercase();
+
+    // PICKUP - <something> (case-insensitive on the prefix). Recurse on the
+    // suffix so e.g. "PICKUP - Skilled Worker - CV" becomes
+    // "PICKUP - CONTRACT VERIFICATION".
+    if let Some(rest) = upper
+        .strip_prefix("PICKUP - ")
+        .or_else(|| upper.strip_prefix("PICKUP-"))
+    {
+        return format!("PICKUP - {}", normalize_service_label(rest));
+    }
+
+    // <base> (<suffix>) — e.g. "FRA Registration (Lost Booking)" becomes
+    // "FRA REGISTRATION (LOST BOOKING)".
+    if let (Some(open), Some(close)) = (upper.rfind('('), upper.rfind(')')) {
+        if open < close && close == upper.len() - 1 {
+            let base = upper[..open].trim();
+            let suffix = upper[open + 1..close].trim();
+            if !base.is_empty() && !suffix.is_empty() {
+                return format!("{} ({})", normalize_service_label(base), suffix);
+            }
+        }
+    }
+
+    // Direct match on canonical uppercase forms.
+    match upper.as_str() {
+        "SKILLED_CV"
+        | "MDW_CV"
+        | "SKILLED-CV"
+        | "MDW-CV"
+        | "SKILLED WORKER - CV"
+        | "MDW - CONTRACT VERIFICATION"
+        | "CONTRACT VERIFICATION" => "CONTRACT VERIFICATION".to_string(),
+        "DH" | "DIRECT HIRE" => "DIRECT HIRE".to_string(),
+        "OWWA" => "OWWA".to_string(),
+        "ACCREDITATION" => "ACCREDITATION".to_string(),
+        "FRA"
+        | "FRA_REGISTRATION"
+        | "FRA-REGISTRATION"
+        | "FRA REGISTRATION" => "FRA REGISTRATION".to_string(),
+        // Fallback: uppercase, replace separators. Keeps tickets legible for
+        // any service the kiosk doesn't yet map explicitly.
+        _ => upper.replace('_', " "),
+    }
+}
+
 fn write_qr(out: &mut Vec<u8>, text: &str) {
     let bytes = text.as_bytes();
     let len = bytes.len() + 3;
@@ -94,7 +158,7 @@ fn build_ticket(data: &TicketData) -> Vec<u8> {
     out.extend_from_slice(INIT);
     out.extend_from_slice(ALIGN_CENTER);
 
-    // Header — small bold (1x), matches the 11pt header in the Electron layout
+    // Header — small bold (1x), matches the 10-11pt header in the Nexus layout
     out.extend_from_slice(BOLD_ON);
     out.extend_from_slice(b"MIGRANT WORKERS OFFICE\n");
     out.extend_from_slice(b"SINGAPORE\n");
@@ -112,19 +176,19 @@ fn build_ticket(data: &TicketData) -> Vec<u8> {
     out.extend_from_slice(BOLD_OFF);
     out.extend_from_slice(b"\n");
 
-    // Service type — 2x bold uppercase (mirrors .service in HTML)
+    // Service type — 2x bold uppercase, normalized to canonical label
     out.extend_from_slice(&size_cmd(2, 2));
     out.extend_from_slice(BOLD_ON);
-    let service = data.service_type.replace('_', " ");
+    let service = normalize_service_label(&data.service_type);
     out.extend_from_slice(service.as_bytes());
     out.extend_from_slice(b"\n");
     out.extend_from_slice(SIZE_NORMAL);
     out.extend_from_slice(BOLD_OFF);
 
-    // Client name — 1x bold (mirrors .client)
+    // Client name — 1x bold (mirrors .client). Uppercased for legibility.
     if !data.client_name.is_empty() {
         out.extend_from_slice(BOLD_ON);
-        out.extend_from_slice(data.client_name.as_bytes());
+        out.extend_from_slice(data.client_name.to_uppercase().as_bytes());
         out.extend_from_slice(b"\n");
         out.extend_from_slice(BOLD_OFF);
     }
@@ -132,12 +196,12 @@ fn build_ticket(data: &TicketData) -> Vec<u8> {
     out.extend_from_slice(DIVIDER);
 
     // Date / time — 1x
-    out.extend_from_slice(format!("{date}   {time}\n", ).as_bytes());
+    out.extend_from_slice(format!("{date}   {time}\n").as_bytes());
     out.extend_from_slice(b"\n");
 
-    // Footer
-    out.extend_from_slice(b"Please wait for your number\n");
-    out.extend_from_slice(b"to be called.\n");
+    // Footer — line break placement matches the Nexus diagram.
+    out.extend_from_slice(b"Please wait for your\n");
+    out.extend_from_slice(b"number to be called.\n");
     out.extend_from_slice(b"\n\n\n");
     out.extend_from_slice(FEED_AND_CUT);
 
@@ -191,7 +255,7 @@ fn build_qr_ticket(data: &QrTicketData) -> Vec<u8> {
 
     // Footer datetime
     out.extend_from_slice(ALIGN_CENTER);
-    out.extend_from_slice(format!("{date}   {time}\n", ).as_bytes());
+    out.extend_from_slice(format!("{date}   {time}\n").as_bytes());
     out.extend_from_slice(b"\n\n\n");
     out.extend_from_slice(FEED_AND_CUT);
 
@@ -237,4 +301,56 @@ pub fn get_printers() -> Vec<PrinterInfo> {
             is_default: p.is_default,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_canonical_inputs() {
+        assert_eq!(normalize_service_label("skilled-cv"), "CONTRACT VERIFICATION");
+        assert_eq!(normalize_service_label("mdw-cv"), "CONTRACT VERIFICATION");
+        assert_eq!(normalize_service_label("SKILLED_CV"), "CONTRACT VERIFICATION");
+        assert_eq!(normalize_service_label("Skilled Worker - CV"), "CONTRACT VERIFICATION");
+        assert_eq!(normalize_service_label("MDW - Contract Verification"), "CONTRACT VERIFICATION");
+        assert_eq!(normalize_service_label("DH"), "DIRECT HIRE");
+        assert_eq!(normalize_service_label("Direct Hire"), "DIRECT HIRE");
+        assert_eq!(normalize_service_label("owwa"), "OWWA");
+        assert_eq!(normalize_service_label("Accreditation"), "ACCREDITATION");
+        assert_eq!(normalize_service_label("fra-registration"), "FRA REGISTRATION");
+        assert_eq!(normalize_service_label("FRA Registration"), "FRA REGISTRATION");
+    }
+
+    #[test]
+    fn preserves_pickup_prefix() {
+        assert_eq!(
+            normalize_service_label("PICKUP - Skilled Worker - CV"),
+            "PICKUP - CONTRACT VERIFICATION"
+        );
+        assert_eq!(normalize_service_label("PICKUP - DH"), "PICKUP - DIRECT HIRE");
+        assert_eq!(
+            normalize_service_label("PICKUP - ACCREDITATION"),
+            "PICKUP - ACCREDITATION"
+        );
+        assert_eq!(normalize_service_label("PICKUP - FRA"), "PICKUP - FRA REGISTRATION");
+    }
+
+    #[test]
+    fn preserves_parenthetical_suffix() {
+        assert_eq!(
+            normalize_service_label("FRA Registration (Lost Booking)"),
+            "FRA REGISTRATION (LOST BOOKING)"
+        );
+        assert_eq!(
+            normalize_service_label("FRA Registration (Pickup)"),
+            "FRA REGISTRATION (PICKUP)"
+        );
+    }
+
+    #[test]
+    fn unknown_falls_back_to_upper_with_underscores_replaced() {
+        assert_eq!(normalize_service_label("custom_thing"), "CUSTOM THING");
+        assert_eq!(normalize_service_label(""), "");
+    }
 }
