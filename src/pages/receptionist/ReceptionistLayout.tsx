@@ -3,11 +3,10 @@ import { SearchPanel } from './SearchPanel';
 import { CheckinPanel } from './CheckinPanel';
 import { WalkInModal } from './WalkInModal';
 import { UrgentFraModal } from './UrgentFraModal';
-import { LostBookingModal } from './LostBookingModal';
 import { StatusBanner } from '../../components/StatusBanner';
 import { useMode } from '../../contexts/ModeContext';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faGear, faUserPlus, faBolt, faPrint, faTriangleExclamation, faFileCircleExclamation } from '@fortawesome/free-solid-svg-icons';
+import { faGear, faUserPlus, faBolt, faPrint, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 import { getSupabaseWriter } from '../../services/supabase.client';
 import { todaySGT } from '../../lib/constants';
 import * as queueService from '../../services/queue.service';
@@ -32,7 +31,6 @@ export function ReceptionistLayout() {
   const [selected, setSelected] = useState<SelectedItem | null>(null);
   const [walkInOpen, setWalkInOpen] = useState(false);
   const [urgentFraOpen, setUrgentFraOpen] = useState(false);
-  const [lostBookingOpen, setLostBookingOpen] = useState(false);
   const [lastCheckin, setLastCheckin] = useState<{ queueNumber: string; name: string } | null>(null);
   const [owwaLoading, setOwwaLoading] = useState(false);
   const [stats, setStats] = useState<QueueStats>({ checkedIn: 0, waiting: 0, served: 0 });
@@ -169,14 +167,11 @@ export function ReceptionistLayout() {
             <FontAwesomeIcon icon={faTriangleExclamation} />
             Urgent FRA
           </button>
-          <button
-            onClick={() => setLostBookingOpen(true)}
-            className="px-4 py-2 text-sm text-white bg-rose-600 rounded-lg hover:bg-rose-700 flex items-center gap-2"
-            title="Agency Quick Queue for bookings lost from backup"
-          >
-            <FontAwesomeIcon icon={faFileCircleExclamation} />
-            Lost Booking
-          </button>
+          {/* Lost Booking button deprecated — replaced by the agency portal
+              re-issuing a transaction_ref under the new Supabase-reduction
+              workflow. Modal kept temporarily in src/pages/receptionist/
+              LostBookingModal.tsx and queue.service.ts:lostBookingCheckin
+              for reference; safe to remove after one release. */}
           <button
             onClick={() => setWalkInOpen(true)}
             className="px-4 py-2 text-sm text-white bg-blue-500 rounded-lg hover:bg-blue-600 flex items-center gap-2"
@@ -236,18 +231,6 @@ export function ReceptionistLayout() {
           // Stats don't change here — invitation is created, not a check-in.
           // Client returns later with transaction_ref for actual check-in.
         }}
-      />
-
-      {/* Lost Booking Modal */}
-      <LostBookingModal
-        open={lostBookingOpen}
-        onClose={() => setLostBookingOpen(false)}
-        onSuccess={(queueNumber, name) => {
-          setLostBookingOpen(false);
-          setLastCheckin({ queueNumber, name });
-          void fetchStats();
-        }}
-        autoPrint={autoPrint}
       />
     </div>
   );

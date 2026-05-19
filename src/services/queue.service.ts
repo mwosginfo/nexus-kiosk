@@ -227,7 +227,7 @@ export async function owwaQuickQueue(): Promise<QueueAssignment> {
   });
 }
 
-// ─── Lost-booking FRA (agency quick queue) ────────────────────────────────
+// ─── Lost-booking FRA (DEPRECATED) ───────────────────────────────────────
 
 export interface LostBookingData {
   readonly fra: string;
@@ -235,9 +235,12 @@ export interface LostBookingData {
 }
 
 /**
- * Special agency queue for FRA bookings whose original data was lost from backup.
- * Collects only FRA name + worker count; issues an A-series (FRA) queue number.
- * Marked with remarks='LOST_BOOKING' for audit.
+ * @deprecated Lost-booking quick queue is removed from the receptionist UI.
+ * Under the Supabase-reduction workflow, lost bookings are recovered by the
+ * agency re-submitting through the AgencyHire portal (a new `transaction_ref`
+ * is minted) rather than the receptionist issuing an untracked A-series
+ * number. This function is kept for one release window in case any external
+ * tooling still calls it; remove after the agencies have migrated.
  */
 export async function lostBookingCheckin(data: LostBookingData): Promise<QueueAssignment> {
   const fra = data.fra.trim();

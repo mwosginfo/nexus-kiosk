@@ -1,3 +1,11 @@
+/**
+ * @deprecated Lost Booking modal is no longer mounted in the receptionist UI.
+ * Under the Supabase-reduction workflow, lost bookings are recovered by the
+ * agency re-submitting through the AgencyHire portal (a new transaction_ref
+ * is minted) rather than the receptionist issuing an untracked A-series
+ * number. This file is kept for one release window for reference; remove
+ * after the agencies have migrated.
+ */
 import { useState } from 'react';
 import { FRA_LIST } from '../../lib/fra-data';
 import * as queueService from '../../services/queue.service';
@@ -73,7 +81,7 @@ export function LostBookingModal({ open, onClose, onSuccess, autoPrint }: LostBo
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6">
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-bold text-gray-800">Agency Quick Queue — Lost Booking</h2>
+          <h2 className="text-lg font-bold text-gray-800">Agency Quick Queue — Lost Booking (Deprecated)</h2>
           <button
             onClick={handleClose}
             className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
