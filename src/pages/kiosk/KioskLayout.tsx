@@ -12,6 +12,7 @@ import * as appointmentService from '../../services/appointment.service';
 import * as fraService from '../../services/fra.service';
 import * as queueService from '../../services/queue.service';
 import * as pickupService from '../../services/pickup.service';
+import * as submissionService from '../../services/submission.service';
 
 type KioskScreen = 'SPLASH' | 'TYPE_SELECT' | 'ENTRY' | 'SUCCESS' | 'ERROR';
 
@@ -46,14 +47,14 @@ export function KioskLayout() {
 
   const dispatchOfwPickup = useCallback(
     async (pickup: pickupService.OfwPickup, refCode: string) => {
-      const dup = await queueService.checkDuplicate(refCode);
+      const dup = await queueService.checkDuplicateForPickup(refCode);
       if (dup) {
         setErrorMsg(`Already checked in as Q#${dup.displayNumber}.`);
         setScreen('ERROR');
         return;
       }
 
-      if (pickup.kind === 'DH') {
+      if (pickup.kind === 'APPOINTMENT') {
         const serviceInfo = await appointmentService.lookupServiceInfo(
           pickup.appointment.service_id,
         );
@@ -71,7 +72,7 @@ export function KioskLayout() {
         completeCheckin({
           queueNumber: assignment.displayNumber,
           name: pickup.clientName,
-          serviceType: pickupService.pickupTicketLabel('DH'),
+          serviceType: pickupService.pickupTicketLabel(pickup),
         });
         return;
       }
@@ -89,7 +90,7 @@ export function KioskLayout() {
       completeCheckin({
         queueNumber: assignment.displayNumber,
         name: pickup.clientName,
-        serviceType: pickupService.pickupTicketLabel('ACCREDITATION'),
+        serviceType: pickupService.pickupTicketLabel(pickup),
       });
     },
     [completeCheckin],
@@ -97,7 +98,7 @@ export function KioskLayout() {
 
   const dispatchFraPickup = useCallback(
     async (pickup: pickupService.FraPickup) => {
-      const dup = await queueService.checkDuplicate(pickup.fra.transaction_ref);
+      const dup = await queueService.checkDuplicateForPickup(pickup.fra.transaction_ref);
       if (dup) {
         setErrorMsg(`Already checked in as Q#${dup.displayNumber}.`);
         setScreen('ERROR');
@@ -116,7 +117,34 @@ export function KioskLayout() {
       completeCheckin({
         queueNumber: assignment.displayNumber,
         name: pickup.clientName,
-        serviceType: pickupService.pickupTicketLabel('FRA'),
+        serviceType: pickupService.pickupTicketLabel(pickup),
+      });
+    },
+    [completeCheckin],
+  );
+
+  const dispatchSubmissionFirstVisit = useCallback(
+    async (submission: pickupService.AccreditationPickup['submission']) => {
+      const dup = await queueService.checkDuplicate(submission.ref_code);
+      if (dup) {
+        setErrorMsg(`Already checked in as Q#${dup.displayNumber}.`);
+        setScreen('ERROR');
+        return;
+      }
+      const name = submissionService.resolveSubmissionName(submission);
+      const assignment = await queueService.checkinAndAssignQueue({
+        refCode: submission.ref_code,
+        appointmentType: 'APPOINTMENT',
+        queueSeries: 'REGULAR',
+        serviceType: 'ACCREDITATION',
+        clientName: name || 'Accreditation Client',
+        transactionRef: submission.ref_code,
+      });
+      submissionService.markArrived(submission.ref_code).catch(() => {});
+      completeCheckin({
+        queueNumber: assignment.displayNumber,
+        name: name || 'Accreditation Client',
+        serviceType: 'Accreditation',
       });
     },
     [completeCheckin],
@@ -141,6 +169,11 @@ export function KioskLayout() {
           }
           if (fra.status === 'cancelled') {
             setErrorMsg('This FRA registration is cancelled and cannot be checked in.');
+            setScreen('ERROR');
+            return;
+          }
+          if (fra.status === 'moved') {
+            setErrorMsg('This FRA group has been split. Please use the new printed QR.');
             setScreen('ERROR');
             return;
           }
@@ -175,7 +208,7 @@ export function KioskLayout() {
           return;
         }
 
-        // OFW / Employer flow — appointments first, accreditation pickup as fallback
+        // OFW / Employer / Accreditation flow.
         const appt = await appointmentService.lookupByRefCode(value);
 
         const pickup = await pickupService.evaluateOfwPickup(value, appt);
@@ -185,6 +218,18 @@ export function KioskLayout() {
         }
 
         if (!appt) {
+          // No appointment row — fall back to accreditation first-visit path.
+          const submission = await submissionService.lookupByRefCode(value);
+          if (submission && submissionService.isBlocked(submission)) {
+            setErrorMsg('This accreditation submission cannot be checked in.');
+            setScreen('ERROR');
+            return;
+          }
+          if (submission && submissionService.isFirstVisitEligible(submission)) {
+            await dispatchSubmissionFirstVisit(submission);
+            return;
+          }
+
           setErrorMsg('No appointment or accreditation submission found for this code.');
           setScreen('ERROR');
           return;
@@ -246,13 +291,15 @@ export function KioskLayout() {
         setLoading(false);
       }
     },
-    [completeCheckin, dispatchFraPickup, dispatchOfwPickup],
+    [completeCheckin, dispatchFraPickup, dispatchOfwPickup, dispatchSubmissionFirstVisit],
   );
 
   useScanner({
     onScan: (scanned) => {
       if (screen === 'SPLASH') return;
       const scanType = detectScanType(scanned);
+      // SUBMISSION routes through the OFW flow — the lookup ladder there falls
+      // back to submission.service when no appointment matches.
       const type: AppointmentType = scanType === 'FRA' ? 'fra' : appointmentType;
       void doCheckin(scanned, type);
     },

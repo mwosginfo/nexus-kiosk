@@ -70,9 +70,10 @@ export interface DuplicateResult {
 }
 
 /**
- * Check for existing check-in today.
- * Excludes FAILED entries (retryable) and DEFERRED entries (re-entry allowed).
- * For non-same-day scans, no duplicate exists by definition (different queue_date).
+ * Check for an existing first-visit check-in today.
+ * Excludes FAILED entries (retryable), DEFERRED entries (re-entry allowed),
+ * and rows already tagged 'PICKUP' (those belong to a second-visit check-in
+ * which has its own dup guard via checkDuplicateForPickup).
  */
 export async function checkDuplicate(
   refCode: string,
@@ -80,13 +81,13 @@ export async function checkDuplicate(
   const supabase = getSupabaseWriter();
   const today = todaySGT();
 
-  // First check for active (non-terminal) entries today
   const { data, error } = await supabase
     .from('kiosk_checkins')
-    .select('id, queue_number, display_number, status')
+    .select('id, queue_number, display_number, status, remarks')
     .eq('ref_code', refCode)
     .eq('queue_date', today)
     .not('status', 'in', '("FAILED","DEFERRED")')
+    .or('remarks.is.null,remarks.neq.PICKUP')
     .limit(1)
     .maybeSingle();
 
@@ -105,22 +106,39 @@ export async function checkDuplicate(
     };
   }
 
-  // Check if there's a deferred entry — allow re-scan but inform caller
-  const { data: deferred } = await supabase
+  return null;
+}
+
+/**
+ * Check for an existing pickup ticket today.
+ * Returns dup only when a PICKUP-remarked row already exists for this code,
+ * so the first-visit row does NOT block a second-visit pickup scan.
+ */
+export async function checkDuplicateForPickup(
+  refCode: string,
+): Promise<DuplicateResult | null> {
+  const supabase = getSupabaseWriter();
+  const today = todaySGT();
+
+  const { data, error } = await supabase
     .from('kiosk_checkins')
-    .select('id, queue_number, display_number, status')
+    .select('id, queue_number, display_number, status, remarks')
     .eq('ref_code', refCode)
     .eq('queue_date', today)
-    .eq('status', 'DEFERRED')
+    .eq('remarks', 'PICKUP')
+    .not('status', 'in', '("FAILED","DEFERRED")')
     .limit(1)
     .maybeSingle();
 
-  if (deferred) {
-    // Deferred entries are allowed to re-check-in (new queue number)
-    return null;
-  }
+  if (error || !data) return null;
 
-  return null;
+  const row = data as Record<string, unknown>;
+  return {
+    isDuplicate: true,
+    displayNumber: row.display_number as string,
+    queueNumber: row.queue_number as number,
+    isDeferred: false,
+  };
 }
 
 // ─── Queue number generation via RPC ───────────────────────────────────────

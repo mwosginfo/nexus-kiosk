@@ -22,9 +22,9 @@ export interface LookupOptions {
 
 /**
  * Look up FRA registration by transaction_ref.
- * Excludes cancelled registrations.
+ * Excludes cancelled registrations. Rows with status='moved' are also
+ * excluded because the group has been split to a new transaction_ref.
  * Strict mode (default): today + 14 days back only.
- * Permissive mode: any date.
  */
 export async function lookupByRef(
   transactionRef: string,
@@ -37,7 +37,7 @@ export async function lookupByRef(
     .from('fra_registrations')
     .select(FRA_FIELDS)
     .eq('transaction_ref', transactionRef.trim())
-    .neq('status', 'cancelled');
+    .not('status', 'in', '("cancelled","moved")');
 
   if (strict) {
     const today = todaySGT();
@@ -59,8 +59,8 @@ export async function lookupByRef(
 }
 
 /**
- * Get ALL contracts in a transaction_ref group.
- * Used to analyze pickup/deferred state for receptionist mode.
+ * Get ALL contracts in a transaction_ref group, including moved/cancelled.
+ * Used to analyze pickup/deferred/moved state for receptionist mode.
  */
 export async function getGroupContracts(
   transactionRef: string,
@@ -126,32 +126,70 @@ export async function browseFra(
 
 export interface FraGroupAnalysis {
   readonly all: readonly FraRegistrationRow[];
-  /** status === 'completed' — ready for pickup */
+  /** Pickup-ready — status in {completed, submitted, or_issued} */
   readonly pickupContracts: readonly FraRegistrationRow[];
-  /** status === 'arrived' AND staff_notes IS NOT NULL — deferred */
+  /**
+   * Deferred — explicit status='deferred' (new model), or the legacy
+   * status='arrived' + non-empty staff_notes encoding that Nexus has not yet
+   * migrated away from (see kiosk spec §3.3).
+   */
   readonly deferredContracts: readonly FraRegistrationRow[];
-  /** Everything else (pending, arrived without notes, picked-up, etc.) */
+  /**
+   * Moved — status='moved' means the worker has been split into a new
+   * transaction_ref. Caller should prompt the client to use the new QR.
+   */
+  readonly movedContracts: readonly FraRegistrationRow[];
+  /** Everything else (pending, arrived without notes, etc.) */
   readonly otherContracts: readonly FraRegistrationRow[];
 }
 
+/** Pickup statuses recognised by the analyser. */
+const FRA_PICKUP_STATUSES: ReadonlySet<string> = new Set([
+  'completed',
+  'submitted',
+  'or_issued',
+]);
+
 /**
  * Categorize FRA contracts within a group.
- *  - pickup    = status='completed'
- *  - deferred  = status='arrived' AND staff_notes is non-empty
- *  - other     = anything else
+ *  - pickup    = status in {completed, submitted, or_issued}
+ *  - deferred  = status='deferred' OR (legacy) status='arrived' + staff_notes
+ *  - moved     = status='moved' — group was split; use the new transaction_ref
+ *  - other     = anything else (pending, arrived without notes, etc.)
  */
 export function analyzeFraGroup(
   contracts: readonly FraRegistrationRow[],
 ): FraGroupAnalysis {
   const pickup: FraRegistrationRow[] = [];
   const deferred: FraRegistrationRow[] = [];
+  const moved: FraRegistrationRow[] = [];
   const other: FraRegistrationRow[] = [];
   for (const c of contracts) {
-    if (c.status === 'completed') pickup.push(c);
-    else if (c.status === 'arrived' && c.staff_notes && c.staff_notes.trim().length > 0) deferred.push(c);
-    else other.push(c);
+    const status = c.status;
+    if (FRA_PICKUP_STATUSES.has(status)) {
+      pickup.push(c);
+    } else if (status === 'deferred') {
+      deferred.push(c);
+    } else if (
+      status === 'arrived' &&
+      c.staff_notes &&
+      c.staff_notes.trim().length > 0
+    ) {
+      // Legacy deferred encoding — kept transitional, remove after Nexus rollout.
+      deferred.push(c);
+    } else if (status === 'moved') {
+      moved.push(c);
+    } else {
+      other.push(c);
+    }
   }
-  return { all: contracts, pickupContracts: pickup, deferredContracts: deferred, otherContracts: other };
+  return {
+    all: contracts,
+    pickupContracts: pickup,
+    deferredContracts: deferred,
+    movedContracts: moved,
+    otherContracts: other,
+  };
 }
 
 // ─── Status updates ────────────────────────────────────────────────────────
@@ -163,7 +201,7 @@ export async function markArrived(transactionRef: string): Promise<void> {
     .from('fra_registrations')
     .update({ status: 'arrived', arrived_at: new Date().toISOString() })
     .eq('transaction_ref', transactionRef)
-    .eq('status', 'pending');
+    .in('status', ['pending', 'confirmed']);
 
   if (error) console.warn('[fra.markArrived] Error (non-fatal):', error.message);
 }

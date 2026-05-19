@@ -103,21 +103,44 @@ export type CheckinValidation =
   | { readonly ok: true }
   | { readonly ok: false; readonly message: string };
 
+/** Status values that route to pickup-mode (post-Supabase-reduction model). */
+const APPOINTMENT_PICKUP_STATUSES: ReadonlyArray<string> = [
+  'submitted',
+  'or_issued',
+  'completed',
+];
+
+/** Terminal statuses that always block the scan. */
+const APPOINTMENT_BLOCKED_STATUSES: ReadonlyArray<string> = [
+  'cancelled',
+  'no_show',
+  'released',
+];
+
 /**
  * Validate an appointment for kiosk self-check-in.
  *
- * Mirrors the Nexus backend filter (queue.service.ts:871-873): hard-block
- * cancelled / completed / no_show. Same-day check-in is the default path;
- * appointments previously deferred at the counter (appt_status='DEFERRED')
- * may be re-checked-in within a 14-day window without restating the booking.
+ * Block-list mirrors the Nexus backend filter, extended with `released`
+ * (terminal) per the Supabase-reduction spec. Pickup-mode statuses
+ * (`submitted`, `or_issued`, `completed`) are accepted here — the pickup
+ * resolver routes them to a PICKUP queue downstream.
+ *
+ * Same-day check-in remains the default path; appointments previously
+ * deferred at the counter (`appt_status='DEFERRED'`) may be re-checked-in
+ * within a 14-day window.
  */
 export function validateAppointment(appointment: AppointmentWithService): CheckinValidation {
-  const rejected: ReadonlyArray<string> = ['cancelled', 'completed', 'no_show'];
-  if (rejected.includes(appointment.status)) {
+  if (APPOINTMENT_BLOCKED_STATUSES.includes(appointment.status)) {
     return {
       ok: false,
       message: `This appointment is ${appointment.status} and cannot be checked in.`,
     };
+  }
+
+  // Pickup-mode — the pickup resolver picks the routing; validation just
+  // confirms the scan itself is allowed.
+  if (APPOINTMENT_PICKUP_STATUSES.includes(appointment.status)) {
+    return { ok: true };
   }
 
   if (appointment.appt_status === 'DEFERRED') {
@@ -141,6 +164,10 @@ export function validateAppointment(appointment: AppointmentWithService): Checki
 
   return { ok: true };
 }
+
+/** Exposed for callers that need the lists without recomputing. */
+export const PICKUP_STATUSES = APPOINTMENT_PICKUP_STATUSES;
+export const BLOCKED_STATUSES = APPOINTMENT_BLOCKED_STATUSES;
 
 // ─── Mark arrived (fire-and-forget, non-fatal) ─────────────────────────────
 
