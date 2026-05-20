@@ -178,16 +178,48 @@ export function KioskLayout() {
             return;
           }
 
-          const fraPickup = pickupService.evaluateFraPickup(fra);
-          if (fraPickup) {
-            await dispatchFraPickup(fraPickup);
-            return;
-          }
+          // Analyze the whole transaction_ref group so a returning client with
+          // partially-processed contracts (some completed, some deferred) is routed
+          // correctly. The single lookup row alone cannot represent a mixed group,
+          // which previously caused a returning deferred client to be mis-routed
+          // into a pickup ticket and never queued for submission.
+          const contracts = await fraService.getGroupContracts(fra.transaction_ref);
+          const analysis = fraService.analyzeFraGroup(contracts);
 
-          const dup = await queueService.checkDuplicate(value);
+          const dup = await queueService.checkDuplicate(fra.transaction_ref);
           if (dup) {
             setErrorMsg(`Already checked in as Q#${dup.displayNumber}.`);
             setScreen('ERROR');
+            return;
+          }
+
+          // Self-service prioritizes unfinished submission over pickup: a returning
+          // client whose contracts were deferred is here to submit them. Mirrors the
+          // receptionist deferred path (clears staff_notes, FRA A-series, DEFERRED tag)
+          // but without the staff pickup/submit modal.
+          if (analysis.deferredContracts.length > 0) {
+            const assignment = await queueService.checkinAndAssignQueue({
+              refCode: fra.transaction_ref,
+              appointmentType: 'FRA',
+              queueSeries: 'FRA',
+              serviceType: 'FRA_REGISTRATION',
+              clientName: fra.fra,
+              transactionRef: fra.transaction_ref,
+              remarks: 'DEFERRED',
+            });
+            fraService
+              .clearStaffNotes(analysis.deferredContracts.map((c) => c.id))
+              .catch(() => {});
+            completeCheckin({
+              queueNumber: assignment.displayNumber,
+              name: fra.fra,
+              serviceType: 'FRA Registration',
+            });
+            return;
+          }
+
+          if (analysis.pickupContracts.length > 0) {
+            await dispatchFraPickup({ kind: 'FRA', fra, clientName: fra.fra });
             return;
           }
 
