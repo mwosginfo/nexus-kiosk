@@ -10,8 +10,7 @@
  *   • Appointments — status in {submitted, or_issued, completed}, OR
  *                    legacy DH past + appt_status='ARRIVED'
  *   • FRA          — status in {completed, submitted, or_issued}
- *   • Submissions  — status in {submitted, or_issued} OR legacy
- *                    trans_status === 'For Submission'
+ *   • Submissions  — trans_status === 'OR_ISSUED' (no appointment_date gate)
  */
 
 import * as appointmentService from './appointment.service';

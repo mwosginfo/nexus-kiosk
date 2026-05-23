@@ -366,10 +366,6 @@ export function CheckinPanel({
       remarks: isPickup ? 'PICKUP' : undefined,
     });
 
-    if (isFirstVisit) {
-      submissionService.markArrived(refCode).catch(() => {});
-    }
-
     onCheckinComplete(assignment.displayNumber, name);
     maybePrint(
       assignment.displayNumber,

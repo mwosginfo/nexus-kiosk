@@ -18,33 +18,19 @@ export const SubmissionRowSchema = z.object({
 export type SubmissionRow = z.infer<typeof SubmissionRowSchema>;
 
 /**
- * Legacy pickup signal — historically the kiosk recognised pickup via
- * `trans_status === 'For Submission'`. Kept until the Nexus rollout finishes
- * migrating accreditation rows to the new `status` model.
+ * Accreditation eligibility is driven entirely by the `trans_status` column —
+ * the accreditation workflow state the office maintains. The `status` column is
+ * internal workflow noise (pending/received/closed/…) and is NOT consulted.
+ *
+ * There is no appointment_date gate: a submission is checkable for as long as
+ * its trans_status sits in one of the two actionable states below.
+ *
+ * Compare case-insensitively — the DB stores title-case `For Submission` and
+ * upper-case `OR_ISSUED`.
  */
-export const ACCREDITATION_PICKUP_TRANS_STATUS = 'For Submission';
 
-/**
- * Statuses that allow a first-visit (arrived) check-in.
- * Matches the Supabase-Reduction kiosk spec §3.4.
- */
-export const ACCREDITATION_FIRST_VISIT_STATUSES = [
-  'pending',
-  'for_submission',
-  'confirmed',
-] as const;
+/** trans_status meaning the client is here to SUBMIT (first visit → arrived ticket). */
+export const ACCREDITATION_FIRST_VISIT_TRANS = 'for submission';
 
-/**
- * Statuses that indicate the submission is ready for the client to pick up
- * (second visit, after OR issuance or evaluator submission).
- */
-export const ACCREDITATION_PICKUP_STATUSES = [
-  'submitted',
-  'or_issued',
-] as const;
-
-/** Terminal statuses — kiosk rejects the scan with a friendly message. */
-export const ACCREDITATION_BLOCKED_STATUSES = [
-  'released',
-  'cancelled',
-] as const;
+/** trans_status meaning the OR is ready (second visit → PICKUP ticket). */
+export const ACCREDITATION_PICKUP_TRANS = 'or_issued';

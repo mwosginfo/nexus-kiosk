@@ -1,21 +1,20 @@
 /**
- * Accreditation submission lookup + arrival.
+ * Accreditation submission lookup + eligibility.
  *
- * Two scan moments are supported:
- *   1. First visit  — submissions.status in {pending, for_submission, confirmed}
- *      → kiosk inserts kiosk_checkins (ACCREDITATION first-visit) and flips
- *        submissions.status to 'arrived'.
- *   2. Pickup       — submissions.status in {submitted, or_issued}, OR the
- *      legacy trans_status === 'For Submission' signal that Nexus has not
- *      yet migrated away from.
+ * Eligibility is driven by the `trans_status` column only (no appointment_date
+ * gate):
+ *   1. First visit — trans_status === 'For Submission'
+ *      → kiosk inserts a fresh ACCREDITATION kiosk_checkins row.
+ *   2. Pickup      — trans_status === 'OR_ISSUED'
+ *      → kiosk inserts a PICKUP - ACCREDITATION kiosk_checkins row.
+ * Anything else is ineligible. Same-day duplicate issuance is prevented by the
+ * kiosk_checkins dedup check, so the kiosk does not mutate the submission row.
  */
 
 import { getSupabaseWriter } from './supabase.client';
 import {
-  ACCREDITATION_BLOCKED_STATUSES,
-  ACCREDITATION_FIRST_VISIT_STATUSES,
-  ACCREDITATION_PICKUP_STATUSES,
-  ACCREDITATION_PICKUP_TRANS_STATUS,
+  ACCREDITATION_FIRST_VISIT_TRANS,
+  ACCREDITATION_PICKUP_TRANS,
   type SubmissionRow,
 } from '../schemas/submission.schema';
 
@@ -38,60 +37,27 @@ export async function lookupByRefCode(refCode: string): Promise<SubmissionRow | 
   return data as SubmissionRow | null;
 }
 
-function normalizedStatus(row: SubmissionRow): string | null {
-  const raw = row.status ?? null;
-  return raw ? raw.toString().toLowerCase() : null;
+function normalizedTransStatus(row: SubmissionRow): string | null {
+  const raw = row.trans_status ?? null;
+  return raw ? raw.toString().trim().toLowerCase() : null;
 }
 
-/** Blocked terminal state — reject the scan. */
-export function isBlocked(submission: SubmissionRow): boolean {
-  const s = normalizedStatus(submission);
-  if (!s) return false;
-  return (ACCREDITATION_BLOCKED_STATUSES as readonly string[]).includes(s);
-}
-
-/** First-visit eligible — client has not yet been to the office for this submission. */
+/** First-visit eligible — client is here to submit (trans_status 'For Submission'). */
 export function isFirstVisitEligible(submission: SubmissionRow): boolean {
-  const s = normalizedStatus(submission);
-  if (!s) {
-    // Some legacy rows lack the new `status` column entirely; treat as pending.
-    return submission.trans_status !== ACCREDITATION_PICKUP_TRANS_STATUS;
-  }
-  return (ACCREDITATION_FIRST_VISIT_STATUSES as readonly string[]).includes(s);
+  return normalizedTransStatus(submission) === ACCREDITATION_FIRST_VISIT_TRANS;
 }
 
-/**
- * Pickup eligible — second visit. Recognises both the new status values and
- * the legacy `trans_status === 'For Submission'` signal so the kiosk keeps
- * working during the Nexus rollout window.
- */
+/** Pickup eligible — OR is ready (trans_status 'OR_ISSUED'). */
 export function isPickupEligible(submission: SubmissionRow): boolean {
-  const s = normalizedStatus(submission);
-  if (s && (ACCREDITATION_PICKUP_STATUSES as readonly string[]).includes(s)) {
-    return true;
-  }
-  return submission.trans_status === ACCREDITATION_PICKUP_TRANS_STATUS;
+  return normalizedTransStatus(submission) === ACCREDITATION_PICKUP_TRANS;
+}
+
+/** Ineligible — trans_status is neither actionable state, so reject the scan. */
+export function isBlocked(submission: SubmissionRow): boolean {
+  return !isFirstVisitEligible(submission) && !isPickupEligible(submission);
 }
 
 /** Display name printed on the ticket. */
 export function resolveSubmissionName(submission: SubmissionRow): string {
   return (submission.pra_name?.trim() || submission.p_name?.trim() || '').trim();
-}
-
-/**
- * Flip `submissions.status` to 'arrived' on first-visit check-in.
- * Guarded against terminal/non-eligible states so retries are safe.
- * Fire-and-forget — check-in succeeds even if the update fails.
- */
-export async function markArrived(refCode: string): Promise<void> {
-  const supabase = getSupabaseWriter();
-  const { error } = await supabase
-    .from('submissions')
-    .update({ status: 'arrived' })
-    .eq('ref_code', refCode.trim())
-    .in('status', [...ACCREDITATION_FIRST_VISIT_STATUSES]);
-
-  if (error) {
-    console.warn('[submission.markArrived] Error (non-fatal):', error.message);
-  }
 }

@@ -1,12 +1,11 @@
 import { useState, useCallback } from 'react';
 import { SplashScreen } from './SplashScreen';
-import { TypeSelectScreen } from './TypeSelectScreen';
 import { EntryScreen } from './EntryScreen';
 import { SuccessScreen } from './SuccessScreen';
 import { ErrorScreen } from './ErrorScreen';
 import { useIdleTimer } from '../../hooks/useIdleTimer';
 import { useScanner } from '../../hooks/useScanner';
-import { detectScanType, resolveServiceLabel } from '../../lib/constants';
+import { detectScanType, resolveServiceLabel, todaySGT, daysAgoSGT } from '../../lib/constants';
 import { isFraCheckinOpen, FRA_CUTOFF_MESSAGE } from '../../lib/business-hours';
 import * as appointmentService from '../../services/appointment.service';
 import * as fraService from '../../services/fra.service';
@@ -14,9 +13,7 @@ import * as queueService from '../../services/queue.service';
 import * as pickupService from '../../services/pickup.service';
 import * as submissionService from '../../services/submission.service';
 
-type KioskScreen = 'SPLASH' | 'TYPE_SELECT' | 'ENTRY' | 'SUCCESS' | 'ERROR';
-
-type AppointmentType = 'regular' | 'fra';
+type KioskScreen = 'SPLASH' | 'ENTRY' | 'SUCCESS' | 'ERROR';
 
 interface CheckinResult {
   readonly queueNumber: string;
@@ -26,7 +23,6 @@ interface CheckinResult {
 
 export function KioskLayout() {
   const [screen, setScreen] = useState<KioskScreen>('SPLASH');
-  const [appointmentType, setAppointmentType] = useState<AppointmentType>('regular');
   const [result, setResult] = useState<CheckinResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -140,7 +136,6 @@ export function KioskLayout() {
         clientName: name || 'Accreditation Client',
         transactionRef: submission.ref_code,
       });
-      submissionService.markArrived(submission.ref_code).catch(() => {});
       completeCheckin({
         queueNumber: assignment.displayNumber,
         name: name || 'Accreditation Client',
@@ -151,8 +146,13 @@ export function KioskLayout() {
   );
 
   const doCheckin = useCallback(
-    async (value: string, type: AppointmentType) => {
-      if (type === 'fra' && !isFraCheckinOpen()) {
+    async (value: string) => {
+      // Single-input kiosk: route by the shape of the scanned/keyed code.
+      // FRA refs are UUIDs / long alphanumerics; appointment + accreditation
+      // refs flow through the OFW ladder (appointment lookup → submission).
+      const isFra = detectScanType(value) === 'FRA';
+
+      if (isFra && !isFraCheckinOpen()) {
         setErrorMsg(FRA_CUTOFF_MESSAGE);
         setScreen('ERROR');
         return;
@@ -160,10 +160,13 @@ export function KioskLayout() {
 
       setLoading(true);
       try {
-        if (type === 'fra') {
-          const fra = await fraService.lookupByRef(value);
+        if (isFra) {
+          // Look up regardless of date: pickup/deferred returnees may carry a QR
+          // older than the fresh-check-in window ("release day onwards"). The
+          // date window is re-applied only on the fresh-check-in branch below.
+          const fra = await fraService.lookupByRef(value, { strict: false });
           if (!fra) {
-            setErrorMsg('No FRA registration found within the last 14 days.');
+            setErrorMsg('No FRA registration found for this code.');
             setScreen('ERROR');
             return;
           }
@@ -196,7 +199,8 @@ export function KioskLayout() {
           // Self-service prioritizes unfinished submission over pickup: a returning
           // client whose contracts were deferred is here to submit them. Mirrors the
           // receptionist deferred path (clears staff_notes, FRA A-series, DEFERRED tag)
-          // but without the staff pickup/submit modal.
+          // but without the staff pickup/submit modal. Gateless — a deferred returnee
+          // may come back after the fresh window has closed.
           if (analysis.deferredContracts.length > 0) {
             const assignment = await queueService.checkinAndAssignQueue({
               refCode: fra.transaction_ref,
@@ -218,8 +222,22 @@ export function KioskLayout() {
             return;
           }
 
+          // Pickup (completed / submitted / or_issued) — gateless, release day onwards.
           if (analysis.pickupContracts.length > 0) {
             await dispatchFraPickup({ kind: 'FRA', fra, clientName: fra.fra });
+            return;
+          }
+
+          // Fresh check-in — re-apply the date window (today through 14 days back,
+          // no future) that the strict lookup used to enforce.
+          if (fra.appointment_date > todaySGT()) {
+            setErrorMsg(`Registration is for ${fra.appointment_date}. Please come on your scheduled day.`);
+            setScreen('ERROR');
+            return;
+          }
+          if (fra.appointment_date < daysAgoSGT(14)) {
+            setErrorMsg('This FRA registration is older than 14 days. Please see the receptionist.');
+            setScreen('ERROR');
             return;
           }
 
@@ -328,35 +346,21 @@ export function KioskLayout() {
 
   useScanner({
     onScan: (scanned) => {
-      if (screen === 'SPLASH') return;
-      const scanType = detectScanType(scanned);
-      // SUBMISSION routes through the OFW flow — the lookup ladder there falls
-      // back to submission.service when no appointment matches.
-      const type: AppointmentType = scanType === 'FRA' ? 'fra' : appointmentType;
-      void doCheckin(scanned, type);
+      // doCheckin auto-detects FRA vs appointment/accreditation from the code.
+      void doCheckin(scanned);
     },
-    enabled: screen === 'TYPE_SELECT' || screen === 'ENTRY',
+    enabled: screen === 'ENTRY',
   });
 
   switch (screen) {
     case 'SPLASH':
-      return <SplashScreen onStart={() => setScreen('TYPE_SELECT')} />;
-    case 'TYPE_SELECT':
-      return (
-        <TypeSelectScreen
-          onSelect={(type) => {
-            setAppointmentType(type);
-            setScreen('ENTRY');
-          }}
-        />
-      );
+      return <SplashScreen onStart={() => setScreen('ENTRY')} />;
     case 'ENTRY':
       return (
         <EntryScreen
-          appointmentType={appointmentType}
           loading={loading}
-          onSubmit={(refCode) => void doCheckin(refCode, appointmentType)}
-          onBack={() => setScreen('TYPE_SELECT')}
+          onSubmit={(refCode) => void doCheckin(refCode)}
+          onBack={() => setScreen('SPLASH')}
         />
       );
     case 'SUCCESS':
@@ -367,7 +371,7 @@ export function KioskLayout() {
           message={errorMsg}
           onRetry={() => {
             setErrorMsg('');
-            setScreen('TYPE_SELECT');
+            setScreen('ENTRY');
           }}
         />
       );

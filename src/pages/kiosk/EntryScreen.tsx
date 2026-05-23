@@ -3,21 +3,16 @@ import { OnScreenKeyboard } from '../../components/OnScreenKeyboard';
 import { KioskHeader } from '../../components/KioskHeader';
 
 interface EntryScreenProps {
-  readonly appointmentType: 'regular' | 'fra';
   readonly loading: boolean;
   readonly onSubmit: (refCode: string) => void;
   readonly onBack: () => void;
 }
 
-export function EntryScreen({ appointmentType, loading, onSubmit, onBack }: EntryScreenProps) {
+export function EntryScreen({ loading, onSubmit, onBack }: EntryScreenProps) {
   const [value, setValue] = useState('');
 
-  const isFra = appointmentType === 'fra';
-  const placeholder = isFra ? 'TRANSACTION REF' : 'REFERENCE CODE';
-  const accentHex = isFra ? '#b02f47' : '#2a4090';
-  const subhead = isFra
-    ? 'Enter your FRA transaction reference'
-    : 'Scan the QR on your confirmation, or enter the reference code below';
+  const placeholder = 'REFERENCE CODE';
+  const accentHex = '#2a4090';
 
   function handleSubmit() {
     const trimmed = value.trim();
@@ -26,17 +21,14 @@ export function EntryScreen({ appointmentType, loading, onSubmit, onBack }: Entr
 
   return (
     <div className="kiosk-mode w-full min-h-screen flex flex-col bg-brand-paper">
-      <KioskHeader kicker={isFra ? 'FRA / Employment Agency' : 'OFW / Employer'} />
+      <KioskHeader />
 
       <main className="flex-1 flex flex-col items-center justify-center px-[clamp(2rem,4vw,6rem)] py-[clamp(2rem,3vw,4rem)]">
-        <p className="text-[clamp(0.8rem,0.9vw,1.1rem)] tracking-kicker font-semibold uppercase mb-3" style={{ color: accentHex }}>
-          Step 2 of 2
-        </p>
         <h2 className="text-[clamp(1.8rem,3vw,3.8rem)] font-extrabold text-brand-ink mb-3 text-center text-pretty">
           Scan Your QR Code
         </h2>
         <p className="text-[clamp(0.9rem,1.1vw,1.3rem)] text-gray-500 mb-[clamp(1.5rem,2vw,2.5rem)] text-center max-w-3xl text-pretty">
-          {subhead}
+          Scan the QR on your confirmation, or enter your reference code below
         </p>
 
         <div className="w-full max-w-xl mb-3">
@@ -62,12 +54,10 @@ export function EntryScreen({ appointmentType, loading, onSubmit, onBack }: Entr
           </div>
         </div>
 
-        {!isFra && (
-          <p className="text-[clamp(0.8rem,0.9vw,1.05rem)] text-gray-500 mb-[clamp(1.5rem,2vw,2.5rem)] text-center max-w-xl text-pretty">
-            For Accreditation transaction, key in reference code{' '}
-            <span className="font-mono text-brand-ink" translate="no">(XXXXX-XXXXXXXX)</span>
-          </p>
-        )}
+        <p className="text-[clamp(0.8rem,0.9vw,1.05rem)] text-gray-500 mb-[clamp(1.5rem,2vw,2.5rem)] text-center max-w-xl text-pretty">
+          For Accreditation transaction, key in reference code{' '}
+          <span className="font-mono text-brand-ink" translate="no">(XXXXX-XXXXXXXX)</span>
+        </p>
 
         {loading ? (
           <div
@@ -83,7 +73,7 @@ export function EntryScreen({ appointmentType, loading, onSubmit, onBack }: Entr
             value={value}
             onChange={setValue}
             onSubmit={handleSubmit}
-            accent={isFra ? 'burgundy' : 'navy'}
+            accent="navy"
           />
         )}
 
