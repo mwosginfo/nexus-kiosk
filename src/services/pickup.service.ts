@@ -6,11 +6,16 @@
  * 6000-series queue and priority 3, but their tickets are tagged
  * `PICKUP — <SERVICE>` so the receptionist can see the intent at a glance.
  *
- * Recognised pickup signals:
- *   • Appointments — status in {submitted, or_issued, completed}, OR
+ * Cross-day re-scan is allowed for every kind — pickups have no
+ * appointment_date gate and the source-of-truth row is never mutated by the
+ * kiosk on a pickup write. The kiosk_checkins dedup (keyed on queue_date +
+ * ref_code + remarks=PICKUP) blocks only same-day duplicates.
+ *
+ * Recognised pickup signals (mirrors the Nexus contract):
+ *   • Appointments — status in {submitted, processed, or_issued}, OR
  *                    legacy DH past + appt_status='ARRIVED'
- *   • FRA          — status in {completed, submitted, or_issued}
- *   • Submissions  — trans_status === 'OR_ISSUED' (no appointment_date gate)
+ *   • FRA          — status === 'or_issued' (only — OR must already exist)
+ *   • Submissions  — trans_status in {submitted, processed, or_issued}
  */
 
 import * as appointmentService from './appointment.service';
@@ -47,22 +52,18 @@ export type PickupResult = AppointmentPickup | AccreditationPickup | FraPickup;
 /** Appointment statuses that route to pickup-mode in the new Supabase-reduction model. */
 const APPOINTMENT_PICKUP_STATUSES: ReadonlySet<string> = new Set([
   'submitted',
+  'processed',
   'or_issued',
-  'completed',
 ]);
 
-/** FRA row statuses that mean the worker is ready for pickup. */
-const FRA_PICKUP_STATUSES: ReadonlySet<string> = new Set([
-  'completed',
-  'submitted',
-  'or_issued',
-]);
+/** FRA row statuses that mean the worker is ready for pickup — OR must exist. */
+const FRA_PICKUP_STATUSES: ReadonlySet<string> = new Set(['or_issued']);
 
 /**
  * Evaluate an OFW/Employer reference code for pickup eligibility.
  *
  * Resolution order:
- *  1. Appointment exists AND status in {submitted, or_issued, completed} —
+ *  1. Appointment exists AND status in {submitted, processed, or_issued} —
  *     post-Supabase-reduction signal that the client is returning for OR.
  *  2. Legacy DH past appointment with `appt_status='ARRIVED'`.
  *  3. Accreditation submission via fallback.
@@ -130,8 +131,11 @@ export async function evaluateOfwPickup(
 
 /**
  * Evaluate an FRA registration for pickup eligibility.
- * Accepts the new pickup statuses (submitted, or_issued) plus the historical
- * `completed` value the Nexus backend used before the Supabase-reduction work.
+ *
+ * Only `or_issued` qualifies — Nexus sets this on `fra_registrations.status`
+ * after `batchIssueOr`, signalling the OR exists and the client may collect it.
+ * Earlier post-processing states (`completed`, `submitted`) are intentionally
+ * excluded: until the OR is issued, there is nothing to pick up.
  */
 export function evaluateFraPickup(fra: FraRegistrationRow): FraPickup | null {
   if (!FRA_PICKUP_STATUSES.has(fra.status)) return null;

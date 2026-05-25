@@ -39,8 +39,8 @@ const DH_SERVICE_ID = SERVICE_ID_MAP['DH'];
 /** Status values that route to pickup-mode in the new Supabase-reduction model. */
 const APPOINTMENT_PICKUP_STATUSES: ReadonlyArray<string> = [
   'submitted',
+  'processed',
   'or_issued',
-  'completed',
 ];
 
 function isDhAppointment(serviceId: string): boolean {

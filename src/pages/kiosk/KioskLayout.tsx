@@ -222,7 +222,7 @@ export function KioskLayout() {
             return;
           }
 
-          // Pickup (completed / submitted / or_issued) — gateless, release day onwards.
+          // Pickup (status='or_issued') — gateless, release day onwards.
           if (analysis.pickupContracts.length > 0) {
             await dispatchFraPickup({ kind: 'FRA', fra, clientName: fra.fra });
             return;

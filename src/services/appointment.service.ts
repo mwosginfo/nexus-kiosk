@@ -106,8 +106,8 @@ export type CheckinValidation =
 /** Status values that route to pickup-mode (post-Supabase-reduction model). */
 const APPOINTMENT_PICKUP_STATUSES: ReadonlyArray<string> = [
   'submitted',
+  'processed',
   'or_issued',
-  'completed',
 ];
 
 /** Terminal statuses that always block the scan. */
@@ -122,7 +122,7 @@ const APPOINTMENT_BLOCKED_STATUSES: ReadonlyArray<string> = [
  *
  * Block-list mirrors the Nexus backend filter, extended with `released`
  * (terminal) per the Supabase-reduction spec. Pickup-mode statuses
- * (`submitted`, `or_issued`, `completed`) are accepted here — the pickup
+ * (`submitted`, `processed`, `or_issued`) are accepted here — the pickup
  * resolver routes them to a PICKUP queue downstream.
  *
  * Same-day check-in remains the default path; appointments previously

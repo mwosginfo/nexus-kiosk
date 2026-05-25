@@ -5,16 +5,19 @@
  * gate):
  *   1. First visit — trans_status === 'For Submission'
  *      → kiosk inserts a fresh ACCREDITATION kiosk_checkins row.
- *   2. Pickup      — trans_status === 'OR_ISSUED'
+ *   2. Pickup      — trans_status ∈ {SUBMITTED, PROCESSED, OR_ISSUED}
  *      → kiosk inserts a PICKUP - ACCREDITATION kiosk_checkins row.
- * Anything else is ineligible. Same-day duplicate issuance is prevented by the
- * kiosk_checkins dedup check, so the kiosk does not mutate the submission row.
+ * Anything else is ineligible. Cross-day re-scan is allowed by design: the
+ * kiosk does NOT mutate the submission row on check-in, so a client whose OR
+ * is still being prepared can return the next day and re-scan. Same-day
+ * duplicates are caught by the kiosk_checkins dedup keyed on (queue_date,
+ * ref_code, remarks).
  */
 
 import { getSupabaseWriter } from './supabase.client';
 import {
   ACCREDITATION_FIRST_VISIT_TRANS,
-  ACCREDITATION_PICKUP_TRANS,
+  ACCREDITATION_PICKUP_TRANS_SET,
   type SubmissionRow,
 } from '../schemas/submission.schema';
 
@@ -47,9 +50,10 @@ export function isFirstVisitEligible(submission: SubmissionRow): boolean {
   return normalizedTransStatus(submission) === ACCREDITATION_FIRST_VISIT_TRANS;
 }
 
-/** Pickup eligible — OR is ready (trans_status 'OR_ISSUED'). */
+/** Pickup eligible — OR cycle in progress (SUBMITTED / PROCESSED / OR_ISSUED). */
 export function isPickupEligible(submission: SubmissionRow): boolean {
-  return normalizedTransStatus(submission) === ACCREDITATION_PICKUP_TRANS;
+  const normalized = normalizedTransStatus(submission);
+  return normalized !== null && ACCREDITATION_PICKUP_TRANS_SET.has(normalized);
 }
 
 /** Ineligible — trans_status is neither actionable state, so reject the scan. */

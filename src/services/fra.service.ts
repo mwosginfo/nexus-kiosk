@@ -126,7 +126,7 @@ export async function browseFra(
 
 export interface FraGroupAnalysis {
   readonly all: readonly FraRegistrationRow[];
-  /** Pickup-ready — status in {completed, submitted, or_issued} */
+  /** Pickup-ready — status === 'or_issued' (OR must already exist) */
   readonly pickupContracts: readonly FraRegistrationRow[];
   /**
    * Deferred — explicit status='deferred' (new model), or the legacy
@@ -143,19 +143,15 @@ export interface FraGroupAnalysis {
   readonly otherContracts: readonly FraRegistrationRow[];
 }
 
-/** Pickup statuses recognised by the analyser. */
-const FRA_PICKUP_STATUSES: ReadonlySet<string> = new Set([
-  'completed',
-  'submitted',
-  'or_issued',
-]);
+/** Pickup statuses recognised by the analyser — OR must be issued. */
+const FRA_PICKUP_STATUSES: ReadonlySet<string> = new Set(['or_issued']);
 
 /**
  * Categorize FRA contracts within a group.
- *  - pickup    = status in {completed, submitted, or_issued}
+ *  - pickup    = status === 'or_issued'
  *  - deferred  = status='deferred' OR (legacy) status='arrived' + staff_notes
  *  - moved     = status='moved' — group was split; use the new transaction_ref
- *  - other     = anything else (pending, arrived without notes, etc.)
+ *  - other     = anything else (pending, arrived without notes, completed-but-no-OR, etc.)
  */
 export function analyzeFraGroup(
   contracts: readonly FraRegistrationRow[],

@@ -23,14 +23,20 @@ export type SubmissionRow = z.infer<typeof SubmissionRowSchema>;
  * internal workflow noise (pending/received/closed/…) and is NOT consulted.
  *
  * There is no appointment_date gate: a submission is checkable for as long as
- * its trans_status sits in one of the two actionable states below.
+ * its trans_status sits in one of the actionable states below. The pickup set
+ * is a superset (SUBMITTED, PROCESSED, OR_ISSUED) so that a returning client
+ * can re-scan on any of the post-submission days until the OR is collected.
  *
- * Compare case-insensitively — the DB stores title-case `For Submission` and
- * upper-case `OR_ISSUED`.
+ * Compare case-insensitively — the DB stores mixed case (`For Submission`,
+ * `OR_ISSUED`, …); the service normalises before lookup.
  */
 
 /** trans_status meaning the client is here to SUBMIT (first visit → arrived ticket). */
 export const ACCREDITATION_FIRST_VISIT_TRANS = 'for submission';
 
-/** trans_status meaning the OR is ready (second visit → PICKUP ticket). */
-export const ACCREDITATION_PICKUP_TRANS = 'or_issued';
+/** trans_status values meaning the OR cycle is in progress (second visit → PICKUP ticket). */
+export const ACCREDITATION_PICKUP_TRANS_SET: ReadonlySet<string> = new Set([
+  'submitted',
+  'processed',
+  'or_issued',
+]);
