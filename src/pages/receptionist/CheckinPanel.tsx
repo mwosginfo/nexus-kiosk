@@ -108,20 +108,19 @@ export function CheckinPanel({
     const serviceLabel = resolveServiceLabel(appt.service_id);
 
     // ── New pickup-mode (status-driven): client returning for OR ──
-    if (APPOINTMENT_PICKUP_STATUSES.includes(status)) {
-      const dup = await queueService.checkDuplicateForPickup(appt.ref_code);
-      if (dup) throw new Error(`Pickup already issued as Q#${dup.displayNumber}.`);
-
+    // Pickup applies only to DH appointments — CV (Skilled/MDW) has no
+    // pickup step. No kiosk_checkins dedup — eligibility is keyed off the
+    // appointment status.
+    if (isDh && APPOINTMENT_PICKUP_STATUSES.includes(status)) {
       const assignment = await queueService.checkinAndAssignQueue({
         refCode: appt.ref_code,
-        appointmentType: 'APPOINTMENT',
+        appointmentType: 'PICKUP',
         queueSeries: serviceInfo.series,
         serviceType: serviceInfo.serviceType,
         clientName: name,
         clientEmail: appt.client_email,
         appointmentId: appt.id,
         transactionRef: appt.ref_code,
-        remarks: 'PICKUP',
       });
       onCheckinComplete(assignment.displayNumber, name);
       maybePrint(assignment.displayNumber, name, `PICKUP - ${serviceLabel}`);
@@ -151,18 +150,15 @@ export function CheckinPanel({
 
     // ── Past + DH pickup (legacy: any past date, appt_status='ARRIVED') ──
     if (isPast && isDh && apptStatus === 'ARRIVED') {
-      const dup = await queueService.checkDuplicateForPickup(appt.ref_code);
-      if (dup) throw new Error(`Pickup already issued as Q#${dup.displayNumber}.`);
       const assignment = await queueService.checkinAndAssignQueue({
         refCode: appt.ref_code,
-        appointmentType: 'APPOINTMENT',
+        appointmentType: 'PICKUP',
         queueSeries: serviceInfo.series,
         serviceType: serviceInfo.serviceType,
         clientName: name,
         clientEmail: appt.client_email,
         appointmentId: appt.id,
         transactionRef: appt.ref_code,
-        remarks: 'PICKUP',
       });
       onCheckinComplete(assignment.displayNumber, name);
       maybePrint(assignment.displayNumber, name, `PICKUP - ${serviceLabel}`);
@@ -290,9 +286,8 @@ export function CheckinPanel({
     fra: FraRegistrationRow,
     pickupContracts: readonly FraRegistrationRow[],
   ): Promise<void> {
-    const dup = await queueService.checkDuplicateForPickup(fra.transaction_ref);
-    if (dup) throw new Error(`Pickup already issued as Q#${dup.displayNumber}.`);
-    await issueFraQueue(fra, fra.transaction_ref, 'PICKUP', '(Pickup)');
+    // No kiosk_checkins dedup — fra_registrations.status='or_issued' is the gate.
+    await issueFraPickupQueue(fra, fra.transaction_ref);
     fraService.markPickedUp(pickupContracts.map((c) => c.id)).catch(() => {});
   }
 
@@ -315,7 +310,7 @@ export function CheckinPanel({
   ): Promise<void> {
     const assignment = await queueService.checkinAndAssignQueue({
       refCode,
-      appointmentType: 'APPOINTMENT',
+      appointmentType: 'FRA',
       queueSeries: 'FRA',
       serviceType: 'FRA_REGISTRATION',
       clientName: fra.fra,
@@ -325,6 +320,28 @@ export function CheckinPanel({
     onCheckinComplete(assignment.displayNumber, fra.fra);
     const label = `FRA Registration${serviceLabelSuffix ? ` ${serviceLabelSuffix}` : ''}`;
     maybePrint(assignment.displayNumber, fra.fra, label);
+  }
+
+  /**
+   * Issue a PICKUP ticket for an FRA group.
+   * Stays on the FRA A-series (matches the fresh submission flow); the
+   * `appointment_type='PICKUP'` column is the signal the receptionist console
+   * uses to distinguish pickups from fresh submissions.
+   */
+  async function issueFraPickupQueue(
+    fra: FraRegistrationRow,
+    refCode: string,
+  ): Promise<void> {
+    const assignment = await queueService.checkinAndAssignQueue({
+      refCode,
+      appointmentType: 'PICKUP',
+      queueSeries: 'FRA',
+      serviceType: 'FRA_REGISTRATION',
+      clientName: fra.fra,
+      transactionRef: fra.transaction_ref,
+    });
+    onCheckinComplete(assignment.displayNumber, fra.fra);
+    maybePrint(assignment.displayNumber, fra.fra, 'PICKUP - FRA');
   }
 
   // ─── Submission (Accreditation) dispatch ────────────────────────────────────
@@ -347,23 +364,20 @@ export function CheckinPanel({
     const refCode = submission.ref_code;
     const name = submissionService.resolveSubmissionName(submission) || 'Accreditation Client';
 
-    const dup = isPickup
-      ? await queueService.checkDuplicateForPickup(refCode)
-      : await queueService.checkDuplicate(refCode);
-    if (dup) {
-      throw new Error(
-        `${isPickup ? 'Pickup' : 'Check-in'} already issued as Q#${dup.displayNumber}.`,
-      );
+    // Pickups skip the kiosk_checkins dedup — eligibility is driven entirely
+    // by trans_status on the submissions row.
+    if (!isPickup) {
+      const dup = await queueService.checkDuplicate(refCode);
+      if (dup) throw new Error(`Check-in already issued as Q#${dup.displayNumber}.`);
     }
 
     const assignment = await queueService.checkinAndAssignQueue({
       refCode,
-      appointmentType: 'APPOINTMENT',
+      appointmentType: isPickup ? 'PICKUP' : 'APPOINTMENT',
       queueSeries: 'REGULAR',
       serviceType: 'ACCREDITATION',
       clientName: name,
       transactionRef: refCode,
-      remarks: isPickup ? 'PICKUP' : undefined,
     });
 
     onCheckinComplete(assignment.displayNumber, name);
@@ -539,7 +553,8 @@ export function CheckinPanel({
     const isFuture = isFutureDate(a.appointment_date);
     const isPast = a.appointment_date < today;
     const isDh = isDhAppointment(a.service_id);
-    const isNewPickup = APPOINTMENT_PICKUP_STATUSES.includes(status);
+    // Pickup only applies to DH appointments; CV does not have a pickup step.
+    const isNewPickup = isDh && APPOINTMENT_PICKUP_STATUSES.includes(status);
     const isTerminal =
       ['cancelled', 'no_show', 'released'].includes(status) ||
       (status === 'completed' && !isNewPickup && !(isDh && a.appt_status === 'ARRIVED' && isPast));

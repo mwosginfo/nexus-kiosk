@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS kiosk_checkins (
 
   -- Check-in identity
   ref_code          TEXT NOT NULL,
-  appointment_type  TEXT NOT NULL CHECK (appointment_type IN ('APPOINTMENT', 'FRA', 'WALKIN')),
+  appointment_type  TEXT NOT NULL CHECK (appointment_type IN ('APPOINTMENT', 'FRA', 'WALKIN', 'PICKUP')),
 
   -- Queue assignment (written by kiosk)
   queue_number      INT NOT NULL,

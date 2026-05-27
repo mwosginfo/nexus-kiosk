@@ -281,7 +281,11 @@ The RPC uses `pg_advisory_xact_lock` to prevent race conditions across multiple 
 | `WALKIN_OWWA` | 900 | `W` + number | `W901`, `W902` |
 | `WALKIN_FRA` | 0 | `WA` + 2-digit pad | `WA01`, `WA02` |
 
-**Pickups always use `REGULAR` (6000 series)**, regardless of underlying service. The `kiosk_checkins.remarks` column is set to `'PICKUP'` to distinguish them at the receptionist console.
+**Pickup queue series by kind:**
+- **DH / Skilled CV / MDW CV / Accreditation pickups** → `REGULAR` (6000 series).
+- **FRA pickups** → `FRA` (A-series), the same series as a fresh FRA submission, so agency clients stay in one number range.
+
+All pickups are tagged with `kiosk_checkins.appointment_type = 'PICKUP'` so the receptionist console can filter pickups without parsing the free-text `remarks` column. (Historical: `remarks='PICKUP'` was the prior signal; it is no longer written.)
 
 ### Service ID → Queue Mapping
 
@@ -323,19 +327,26 @@ new Date().toISOString().split('T')[0]
 
 The Rust side uses `chrono::FixedOffset::east_opt(8 * 3600)` for the same purpose when stamping print tickets.
 
-### 5.2 Ref Code Format Detection
+### 5.2 Ref Code Routing — Unified Lookup
+
+The kiosk uses a **unified router**: every scanned/keyed value is probed against `appointments`, `fra_registrations`, and `submissions` **in parallel** (`Promise.all`). Whichever table returns a row wins.
 
 ```typescript
-function detectScanType(value: string): 'APPOINTMENT' | 'FRA' | 'SUBMISSION' | 'UNKNOWN' {
-  if (UUID_REGEX.test(value)) return 'FRA';
-  if (SUBMISSION_REGEX.test(value)) return 'SUBMISSION';   // single hyphen, e.g. HSW2601-FM00CD
-  if (/^[A-Z0-9]{6,10}$/.test(value)) return 'APPOINTMENT';
-  if (/^[A-Za-z0-9]{20,30}$/.test(value)) return 'FRA';
-  return 'UNKNOWN';
-}
+const [appt, fra, submission] = await Promise.all([
+  appointmentService.lookupByRefCode(value),
+  fraService.lookupByRef(value, { strict: false }),
+  submissionService.lookupByRefCode(value),
+]);
 ```
 
-The single-input kiosk uses this to route: `FRA` → the FRA branch (with the 12pm cutoff guard); everything else (`APPOINTMENT`/`SUBMISSION`/`UNKNOWN`) flows through the OFW ladder, which tries `appointments` first and falls back to `submissions` for accreditation refs.
+Rules:
+- **0 matches** → error `"No appointment, FRA registration, or accreditation submission found for this code."`
+- **Exactly 1 match** → dispatch to that table's handler (FRA / appointment / submission).
+- **2+ matches** → error `"Ambiguous reference — please see the receptionist."` (Rare, but possible: the three tables key on different columns — `appointments.ref_code`, `fra_registrations.transaction_ref`, `submissions.ref_code` — and AgencyHire now issues 8-char alphanumeric refs in shapes that can collide.)
+
+The legacy `detectScanType()` helper still exists in `lib/constants.ts` but is now a **shape hint only** — it must not gate routing. AgencyHire's new 8-char FRA `transaction_ref` (e.g. `ABCD1234`) collides with the appointment shape, so shape-based routing would mis-route every new FRA scan to the appointment branch and miss the registration.
+
+The FRA 12pm cutoff (§5.7) is enforced **after** the FRA row resolves, so a legitimate post-noon appointment never sees the FRA cutoff message.
 
 ### 5.3 Client Name Display
 
@@ -369,7 +380,7 @@ OFW fields are **dedicated top-level columns** on `appointments`:
 
 ### 5.6 FRA Check-in Window
 
-FRA registrations may be checked in from today through 14 days back (CLAUDE.md historical rule). The `lookupByRef` helper in `fra.service.ts` enforces the window via `daysAgoSGT(14)`. Statuses `completed` and `cancelled` are blocked for fresh check-in (`completed` triggers the pickup branch instead).
+FRA registrations may be checked in from today through 14 days back (CLAUDE.md historical rule). The `lookupByRef` helper in `fra.service.ts` enforces the window via `daysAgoSGT(14)` only when called with `{ strict: true }` (receptionist mode). The kiosk uses `{ strict: false }` and re-applies the window on the fresh-check-in branch inside `handleFra`. Statuses `cancelled` and `moved` are blocked outright; `or_issued` is the only pickup-eligible status (see §5.8).
 
 ### 5.7 FRA 12pm SGT Cutoff
 
@@ -380,7 +391,7 @@ Cut off of submission for Contract at 12PM. You may resubmit
 the next working day, between 9AM and 12PM.
 ```
 
-Implemented in `src/lib/business-hours.ts` (`isFraCheckinOpen()` + `FRA_CUTOFF_MESSAGE`). Enforced in the `doCheckin` entry guard (after FRA detection) so the rule cannot be bypassed by an HID scanner.
+Implemented in `src/lib/business-hours.ts` (`isFraCheckinOpen()` + `FRA_CUTOFF_MESSAGE`). Enforced inside `handleFra` in `KioskLayout.tsx` — after the FRA row resolves via the unified router (§5.2), so a legitimate appointment scanned after noon never sees the FRA cutoff. The cutoff still cannot be bypassed by an HID scanner because the FRA branch is only entered when `fra_registrations` returns a row.
 
 **Pickups ignore the date window.** The 14-day window applies only to *fresh* check-ins. A pickup/deferred returnee may present a QR older than 14 days ("release day onwards") and still resolve. The kiosk FRA lookup runs non-strict (`lookupByRef(ref, { strict: false })`) and re-applies the today-through-14-days-back window only on the fresh-check-in branch.
 
@@ -390,19 +401,19 @@ A scanned/keyed reference is treated as a **pickup** (issuing a `PICKUP` ticket 
 
 | Kind | Source table | Pickup signal | Notes |
 |---|---|---|---|
-| **Appointment (incl. DH)** | `appointments` | `status ∈ {submitted, processed, or_issued}` | Lowercase, exact match. Legacy fallback: past DH with `appt_status === 'ARRIVED'`. |
+| **DH** | `appointments` (DH service only) | `status ∈ {submitted, processed, or_issued}` | Lowercase, exact match. CV (Skilled / MDW) appointments have **no pickup step** and never route here. Legacy fallback: past DH with `appt_status === 'ARRIVED'`. |
 | **Accreditation** | `submissions` | `trans_status ∈ {submitted, processed, or_issued}` (case-insensitive) | `trans_status === 'For Submission'` is a *first-visit* (fresh) check-in, not a pickup. Resolved only when no `appointments` row matches the ref. |
 | **FRA** | `fra_registrations` | `status === 'or_issued'` | Nexus sets `or_issued` only after `batchIssueOr` — earlier post-processing states (`completed`, `submitted`) are NOT pickup-eligible because the OR does not exist yet. Mixed groups: a deferred contract routes to submission first. |
 
-All pickups insert with `queueSeries: 'REGULAR'`, `priority: 3`, `remarks: 'PICKUP'`. The printed `serviceType` line reads `PICKUP - DH`, `PICKUP - FRA`, or `PICKUP - ACCREDITATION` — generated by `pickupService.pickupTicketLabel()`.
+All pickups insert with `appointmentType: 'PICKUP'`, `priority: 3`. Queue series depends on kind: **FRA pickups use `'FRA'`** (A-series), all other pickups use `'REGULAR'` (6000 series). The printed `serviceType` line reads `PICKUP - DH`, `PICKUP - FRA`, or `PICKUP - ACCREDITATION` — generated by `pickupService.pickupTicketLabel()`.
 
-> **Cross-day re-scan is allowed for every pickup kind.** The kiosk does NOT mutate the source-of-truth row (`appointments` / `submissions` / `fra_registrations`) on a pickup write — only the `kiosk_checkins` row is inserted. Same-day duplicates are caught by `checkDuplicateForPickup()` keyed on `(queue_date, ref_code, remarks='PICKUP')`; a different `queue_date` is always allowed.
+> **Pickup eligibility is driven entirely by the source-table status.** The kiosk does not consult `kiosk_checkins` for pickup dedup. Once the source row leaves the pickup-eligible status set (e.g. an FRA row transitions out of `or_issued` after release), subsequent scans naturally route elsewhere. Cross-day and same-day re-scans both succeed while the source status remains pickup-eligible. The source-of-truth row (`appointments` / `submissions` / `fra_registrations`) is not mutated by the kiosk on a pickup write — only the `kiosk_checkins` row is inserted.
 
 > **Accreditation eligibility is `trans_status`-only.** The `submissions.status` column holds internal workflow values (`pending`/`received`/`closed`/…) and is ignored. The pickup set is a superset (`submitted`/`processed`/`or_issued`) so a client whose OR is still being prepared can return on a later day and re-scan, regardless of which exact post-submission state the back office has progressed to.
 
 ### 5.9 Duplicate Prevention
 
-Before every check-in, query `kiosk_checkins` for today's date + ref_code. If a match exists (status not in `{FAILED, DEFERRED}`), show the existing queue number instead of creating a duplicate. Pickup writes go through the same dedup check.
+Before every **fresh** check-in, query `kiosk_checkins` for today's date + ref_code. If a match exists (status not in `{FAILED, DEFERRED}`, and `appointment_type != 'PICKUP'`), show the existing queue number instead of creating a duplicate. **Pickup writes skip this check entirely** — eligibility is driven by the source-table status (see §5.8), so the kiosk does not look at prior `kiosk_checkins` rows for pickups.
 
 ### 5.10 Priority System
 
@@ -452,8 +463,8 @@ Mode switches apply **in place** under Tauri (no window recreate). The Electron 
 
 ### Kiosk-Mode UI Rules
 - **No icons.** Kiosk screens (`src/pages/kiosk/`) must not import FontAwesome. Use text labels, dividers, and uppercase letter-spaced section headers instead. The legacy receptionist screens may still use FA.
-- **Single-input entry.** The kiosk flow is `SPLASH → ENTRY → SUCCESS/ERROR` — one reference-code input, no type-select step. `detectScanType` routes FRA vs appointment/accreditation automatically (see §5.2). No phone-search path.
-- **Manual entry is reference-code only.** Phone-number lookup is removed from the kiosk. The entry screen carries the helper line `For Accreditation transaction, key in reference code (XXXXX-XXXXXXXX)`.
+- **Single-input entry.** The kiosk flow is `SPLASH → ENTRY → SUCCESS/ERROR` — one reference-code input, no type-select step. The unified router in `KioskLayout.doCheckin` (see §5.2) probes `appointments`, `fra_registrations`, and `submissions` in parallel and dispatches on whichever returns a row. No phone-search path.
+- **Manual entry is reference-code only.** Phone-number lookup is removed from the kiosk. The entry screen carries the helper line `For Accreditation transaction, key in reference code (XXXXX-XXXXXXXX)`. The on-screen alphanumeric keyboard includes a `-` key so accreditation refs can be typed without a physical keyboard (`OnScreenKeyboard.tsx`).
 - **Auto-print on success.** Every successful kiosk check-in (including pickups) auto-prints. There is no print toggle on the kiosk path.
 
 ### State Management
@@ -524,7 +535,7 @@ This app writes to Supabase. The Nexus backend reads from Supabase. They never c
 - **Status conventions** — receptionist mode writes `WAITING` (complete entry). Kiosk mode can write `PENDING` if it cannot resolve the service.
 - **Priority values** — must match: 3 for appointments / FRA / pickups / OWWA walk-ins, 2 for regular walk-ins.
 - **Display number format** — must use `formatQueueDisplay()` from `lib/constants.ts`.
-- **Pickup marker** — the `kiosk_checkins.remarks` column carries `'PICKUP'` (or `'DEFERRED'`) so the receptionist console can distinguish pickup tickets from fresh check-ins. Eligibility filters mirror the Nexus pickup view (queue.service.ts:124-138).
+- **Pickup marker** — the `kiosk_checkins.appointment_type` column carries `'PICKUP'` so the receptionist console can distinguish pickup tickets from fresh check-ins. The `remarks` column may still carry `'DEFERRED'` for deferred re-check-ins. Eligibility filters mirror the Nexus pickup view (queue.service.ts:124-138).
 
 ### What Nexus Expects From Each Check-in
 See AUDIT.md Section 4 for the exact column spec of `kiosk_checkins` rows.

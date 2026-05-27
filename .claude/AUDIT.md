@@ -70,7 +70,7 @@
 | A6 | `priority` = 3 (appointment/FRA), 7 (walk-in) | Never null or 0 | Inspect inserted rows |
 | A7 | `call_count` initialized to 0 | Never null | Inspect inserted rows |
 | A8 | `status` = `'WAITING'` (receptionist) or `'PENDING'` (kiosk) | Never blank | Check per mode |
-| A9 | `appointment_type` matches scan type | `'APPOINTMENT'`, `'FRA'`, or `'WALKIN'` | CHECK constraint enforced by Supabase |
+| A9 | `appointment_type` matches scan type | `'APPOINTMENT'`, `'FRA'`, `'WALKIN'`, or `'PICKUP'` | CHECK constraint enforced by Supabase (see `supabase/migrations/20260527_pickup_appointment_type.sql`) |
 | A10 | `queue_series` matches service mapping | See DATABASE.md Section 4 | Cross-reference with service slug |
 | A11 | `service_type` matches service mapping | Same | Same |
 | A12 | `client_name` built correctly | No extra spaces, no "undefined", no "null" | Use `filter(Boolean).join(' ')` |
@@ -83,14 +83,25 @@
 
 | # | Check | Expected | How to Verify |
 |---|-------|----------|---------------|
-| B1 | Appointment date = today SGT | Reject past/future appointments | Test with yesterday's appointment |
-| B2 | FRA date within past 14 days | Allow appointments up to 14 days old | Test with 15-day-old FRA |
-| B3 | Appointment status check | Reject cancelled/completed/no_show | Test each status |
-| B4 | FRA status check | Reject completed/cancelled | Test each status |
-| B5 | Duplicate prevents double check-in | Show existing Q# for same ref_code + today | Scan same QR twice |
-| B6 | Duplicate check excludes FAILED | FAILED entries can be retried | Manually set status to FAILED, re-scan |
-| B7 | Service ID → slug resolves all 5+ services | skilled-cv, mdw-cv, dh, owwa, fra-registration, accreditation | Test each service type |
-| B8 | Unknown service falls back gracefully | Default to DH/REGULAR, never crash | Test with fake service_id |
+| B1 | Appointment date = today SGT | Reject past/future appointments (except deferred re-checkin within 14d) | Test with yesterday's appointment |
+| B2 | FRA fresh-checkin date within past 14 days | Pickups/deferred bypass this window | Test with 15-day-old FRA (fresh vs pickup) |
+| B3 | Appointment status hard-block | Reject `cancelled / completed / no_show` for fresh check-in | Test each status |
+| B4 | FRA status block | Reject `cancelled / moved` outright. `or_issued` routes to PICKUP. | Test each status |
+| B5 | Duplicate prevents double check-in (fresh only) | Show existing Q# for same `(queue_date, ref_code)` where `appointment_type != 'PICKUP'`. Pickups do NOT consult kiosk_checkins — eligibility is driven by source-table status. | Scan same fresh QR twice in one day |
+| B6 | Duplicate check excludes FAILED / DEFERRED / PICKUP | These rows do not block re-checkin | Manually set status, re-scan |
+| B7 | Service ID → slug resolves all 6 services | skilled-cv, mdw-cv, dh, owwa, fra-registration, accreditation | Test each service type |
+| B8 | Unknown service falls back gracefully | Default to SKILLED_CV/REGULAR, never crash | Test with fake service_id |
+| B9 | Unified router probes all three tables | `appointments`, `fra_registrations`, `submissions` queried in parallel | Inspect `KioskLayout.doCheckin` |
+| B10 | Ambiguous reference rejected | 2+ table matches → ERROR, no silent winner | Manually create a colliding ref in two tables |
+| B11 | New 8-char FRA `transaction_ref` routes correctly | Lands on `handleFra`, not `handleAppointment` | Scan an AgencyHire post-2026-05 FRA QR |
+| B12 | FRA 12pm cutoff fires AFTER row resolution | Appointment scan after noon does NOT see FRA cutoff | Scan an appointment ref at 13:00 SGT |
+| B13 | DH appointment pickup statuses | DH only: `submitted / processed / or_issued` → PICKUP ticket on REGULAR series. CV (Skilled/MDW) has NO pickup — always fresh check-in. | Set appointment.status on a DH vs CV ref, scan |
+| B14 | FRA pickup status | ONLY `or_issued` → PICKUP. `completed / submitted` are NOT pickup. | Set fra.status, scan |
+| B15 | Accreditation pickup statuses | `trans_status ∈ {submitted, processed, or_issued}` (case-insensitive) → PICKUP | Set submissions.trans_status, scan |
+| B16 | Accreditation first-visit | `trans_status='For Submission'` → fresh ACCREDITATION check-in | Set submissions.trans_status |
+| B17 | Cross-day pickup re-scan | Different `queue_date` for same ref allowed for all pickup kinds | Scan today + scan again tomorrow |
+| B18 | Pickup writes use `appointment_type='PICKUP'` | No `remarks='PICKUP'` parsing needed; receptionist filters on the typed column | Inspect inserted pickup rows |
+| B19 | Pickup eligibility is status-only | No kiosk_checkins dedup for pickups. Once source-table status leaves the pickup set, scans no longer route here. | Issue two same-day pickups for one ref and confirm both succeed |
 
 ---
 
@@ -98,14 +109,16 @@
 
 | # | Check | Expected | How to Verify |
 |---|-------|----------|---------------|
-| C1 | No internet → clear message | "Cannot connect to server" | Disconnect network |
-| C2 | Appointment not found → clear message | "No appointment found" | Scan invalid QR |
-| C3 | Already checked in → show existing Q# | "Already checked in as Q#6001" | Scan same QR twice |
+| C1 | No internet → clear message | "Cannot connect to server. Please check network connection." | Disconnect network |
+| C2 | No match → unified message | "No appointment, FRA registration, or accreditation submission found for this code." | Scan invalid QR |
+| C3 | Already checked in → show existing Q# | "Already checked in as Q#6001." | Scan same QR twice |
 | C4 | Cancelled appointment → explain | "Appointment is cancelled" | Test with cancelled status |
-| C5 | FRA not found within 14 days → explain | "No FRA registration found" | Scan old FRA ref |
-| C6 | RPC fails → retry message | "Failed to generate queue number" | Mock RPC failure |
-| C7 | Printer offline → still show Q# | Screen displays number even if print fails | Disconnect printer |
-| C8 | Supabase rate limit → graceful retry | No raw error shown to user | Mock 429 response |
+| C5 | FRA past 12pm cutoff → explain | FRA_CUTOFF_MESSAGE verbatim | Scan FRA after 12:00 SGT |
+| C6 | FRA group split → explain | "This FRA group has been split. Please use the new printed QR." | Test with status='moved' |
+| C7 | Ambiguous reference → refer to staff | "Ambiguous reference — please see the receptionist." | Create colliding rows |
+| C8 | RPC fails → retry message | "Failed to generate queue number" | Mock RPC failure |
+| C9 | Printer offline → still show Q# | Screen displays number even if print fails | Disconnect printer |
+| C10 | Supabase rate limit → graceful retry | No raw error shown to user | Mock 429 response |
 
 ---
 
@@ -127,13 +140,14 @@
 | # | Check | Expected | How to Verify |
 |---|-------|----------|---------------|
 | E1 | No walk-in registration | No "Walk-in" button in kiosk mode | Visual inspection |
-| E2 | Auto-reset after success | Returns to splash after ~5 seconds | Time the transition |
-| E3 | Auto-reset after error | Returns to splash after ~5 seconds | Trigger error, time reset |
+| E2 | Single-input entry | State machine is SPLASH → ENTRY → SUCCESS/ERROR (no TYPE_SELECT, no SEARCH_METHOD) | Inspect `KioskLayout.tsx` |
+| E3 | On-screen keyboard includes `-` | Accreditation refs like `HSW2601-FM00CD` can be keyed without a physical keyboard | Inspect alphanumeric layout |
 | E4 | Idle timeout | Resets to splash after 60s of no input | Wait and observe |
-| E5 | Auto-print on success | Ticket prints without interaction | Test with printer connected |
+| E5 | Auto-print on success | Ticket prints without interaction (kiosk mode always auto-prints) | Test with printer connected |
 | E6 | Large queue number display | Readable from 2 meters | Stand back and read |
 | E7 | "See receptionist" on errors | Shown on all error screens | Trigger each error type |
 | E8 | Locked interface | No address bar, no back, no menu bar, no dev tools | Try to escape kiosk UI |
+| E9 | No icons in kiosk screens | `src/pages/kiosk/` does not import FontAwesome | Grep for `@fortawesome` under `src/pages/kiosk/` |
 
 ---
 
@@ -149,7 +163,7 @@
 | F6 | Today's check-in history visible | Recent check-in banner shows last entry | Check after check-in |
 | F7 | Stats visible | Checked in / Waiting / Served counts | Visual inspection |
 | F8 | Date browsing works | Can browse other dates' appointments | Change date picker |
-| F9 | Search works | Name, email, phone search filters | Type search queries |
+| F9 | Search works | Single input + scope radio (All / Regular / FRA Reg / ACCRE). 'All' probes the three tables in parallel; the others narrow to one table. Phone search has been removed. | Try each scope |
 
 ---
 

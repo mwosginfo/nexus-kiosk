@@ -5,13 +5,15 @@ import { SuccessScreen } from './SuccessScreen';
 import { ErrorScreen } from './ErrorScreen';
 import { useIdleTimer } from '../../hooks/useIdleTimer';
 import { useScanner } from '../../hooks/useScanner';
-import { detectScanType, resolveServiceLabel, todaySGT, daysAgoSGT } from '../../lib/constants';
+import { resolveServiceLabel, todaySGT, daysAgoSGT } from '../../lib/constants';
 import { isFraCheckinOpen, FRA_CUTOFF_MESSAGE } from '../../lib/business-hours';
 import * as appointmentService from '../../services/appointment.service';
 import * as fraService from '../../services/fra.service';
 import * as queueService from '../../services/queue.service';
 import * as pickupService from '../../services/pickup.service';
 import * as submissionService from '../../services/submission.service';
+import type { AppointmentWithService } from '../../schemas/appointment.schema';
+import type { FraRegistrationRow } from '../../schemas/fra.schema';
 
 type KioskScreen = 'SPLASH' | 'ENTRY' | 'SUCCESS' | 'ERROR';
 
@@ -42,28 +44,24 @@ export function KioskLayout() {
   }, []);
 
   const dispatchOfwPickup = useCallback(
-    async (pickup: pickupService.OfwPickup, refCode: string) => {
-      const dup = await queueService.checkDuplicateForPickup(refCode);
-      if (dup) {
-        setErrorMsg(`Already checked in as Q#${dup.displayNumber}.`);
-        setScreen('ERROR');
-        return;
-      }
-
+    async (pickup: pickupService.OfwPickup, _refCode: string) => {
+      // No kiosk_checkins dedup for pickups — eligibility is driven by the
+      // source-table status. A returning client may rescan freely; if the OR
+      // has already been released the source row will no longer be in a
+      // pickup-eligible state and the unified router will not reach this branch.
       if (pickup.kind === 'APPOINTMENT') {
         const serviceInfo = await appointmentService.lookupServiceInfo(
           pickup.appointment.service_id,
         );
         const assignment = await queueService.checkinAndAssignQueue({
           refCode: pickup.appointment.ref_code,
-          appointmentType: 'APPOINTMENT',
+          appointmentType: 'PICKUP',
           queueSeries: serviceInfo.series,
           serviceType: serviceInfo.serviceType,
           clientName: pickup.clientName,
           clientEmail: pickup.appointment.client_email,
           appointmentId: pickup.appointment.id,
           transactionRef: pickup.appointment.ref_code,
-          remarks: 'PICKUP',
         });
         completeCheckin({
           queueNumber: assignment.displayNumber,
@@ -76,12 +74,11 @@ export function KioskLayout() {
       // ACCREDITATION
       const assignment = await queueService.checkinAndAssignQueue({
         refCode: pickup.submission.ref_code,
-        appointmentType: 'APPOINTMENT',
+        appointmentType: 'PICKUP',
         queueSeries: 'REGULAR',
         serviceType: 'ACCREDITATION',
         clientName: pickup.clientName,
         transactionRef: pickup.submission.ref_code,
-        remarks: 'PICKUP',
       });
       completeCheckin({
         queueNumber: assignment.displayNumber,
@@ -94,21 +91,19 @@ export function KioskLayout() {
 
   const dispatchFraPickup = useCallback(
     async (pickup: pickupService.FraPickup) => {
-      const dup = await queueService.checkDuplicateForPickup(pickup.fra.transaction_ref);
-      if (dup) {
-        setErrorMsg(`Already checked in as Q#${dup.displayNumber}.`);
-        setScreen('ERROR');
-        return;
-      }
-      // Pickup uses the regular 6000 series, not the FRA A-series
+      // FRA pickup stays on the FRA A-series (same as the fresh submission flow).
+      // appointment_type='PICKUP' is the signal the receptionist console reads;
+      // queue_series='FRA' keeps the agency clients in their own number range.
+      // No kiosk_checkins dedup — fra_registrations.status='or_issued' is the
+      // gate. Once the OR is received the status moves on and the unified
+      // router will not classify subsequent scans as pickup.
       const assignment = await queueService.checkinAndAssignQueue({
         refCode: pickup.fra.transaction_ref,
-        appointmentType: 'APPOINTMENT',
-        queueSeries: 'REGULAR',
+        appointmentType: 'PICKUP',
+        queueSeries: 'FRA',
         serviceType: 'FRA_REGISTRATION',
         clientName: pickup.clientName,
         transactionRef: pickup.fra.transaction_ref,
-        remarks: 'PICKUP',
       });
       completeCheckin({
         queueNumber: assignment.displayNumber,
@@ -145,187 +140,216 @@ export function KioskLayout() {
     [completeCheckin],
   );
 
-  const doCheckin = useCallback(
-    async (value: string) => {
-      // Single-input kiosk: route by the shape of the scanned/keyed code.
-      // FRA refs are UUIDs / long alphanumerics; appointment + accreditation
-      // refs flow through the OFW ladder (appointment lookup → submission).
-      const isFra = detectScanType(value) === 'FRA';
-
-      if (isFra && !isFraCheckinOpen()) {
+  const handleFra = useCallback(
+    async (fra: FraRegistrationRow, value: string) => {
+      // Cutoff is enforced AFTER the row resolves so a legitimate appointment
+      // scanned after 12pm never sees the FRA cutoff message.
+      if (!isFraCheckinOpen()) {
         setErrorMsg(FRA_CUTOFF_MESSAGE);
         setScreen('ERROR');
         return;
       }
+      if (fra.status === 'cancelled') {
+        setErrorMsg('This FRA registration is cancelled and cannot be checked in.');
+        setScreen('ERROR');
+        return;
+      }
+      if (fra.status === 'moved') {
+        setErrorMsg('This FRA group has been split. Please use the new printed QR.');
+        setScreen('ERROR');
+        return;
+      }
 
-      setLoading(true);
-      try {
-        if (isFra) {
-          // Look up regardless of date: pickup/deferred returnees may carry a QR
-          // older than the fresh-check-in window ("release day onwards"). The
-          // date window is re-applied only on the fresh-check-in branch below.
-          const fra = await fraService.lookupByRef(value, { strict: false });
-          if (!fra) {
-            setErrorMsg('No FRA registration found for this code.');
-            setScreen('ERROR');
-            return;
-          }
-          if (fra.status === 'cancelled') {
-            setErrorMsg('This FRA registration is cancelled and cannot be checked in.');
-            setScreen('ERROR');
-            return;
-          }
-          if (fra.status === 'moved') {
-            setErrorMsg('This FRA group has been split. Please use the new printed QR.');
-            setScreen('ERROR');
-            return;
-          }
+      const contracts = await fraService.getGroupContracts(fra.transaction_ref);
+      const analysis = fraService.analyzeFraGroup(contracts);
 
-          // Analyze the whole transaction_ref group so a returning client with
-          // partially-processed contracts (some completed, some deferred) is routed
-          // correctly. The single lookup row alone cannot represent a mixed group,
-          // which previously caused a returning deferred client to be mis-routed
-          // into a pickup ticket and never queued for submission.
-          const contracts = await fraService.getGroupContracts(fra.transaction_ref);
-          const analysis = fraService.analyzeFraGroup(contracts);
+      const dup = await queueService.checkDuplicate(fra.transaction_ref);
+      if (dup) {
+        setErrorMsg(`Already checked in as Q#${dup.displayNumber}.`);
+        setScreen('ERROR');
+        return;
+      }
 
-          const dup = await queueService.checkDuplicate(fra.transaction_ref);
-          if (dup) {
-            setErrorMsg(`Already checked in as Q#${dup.displayNumber}.`);
-            setScreen('ERROR');
-            return;
-          }
-
-          // Self-service prioritizes unfinished submission over pickup: a returning
-          // client whose contracts were deferred is here to submit them. Mirrors the
-          // receptionist deferred path (clears staff_notes, FRA A-series, DEFERRED tag)
-          // but without the staff pickup/submit modal. Gateless — a deferred returnee
-          // may come back after the fresh window has closed.
-          if (analysis.deferredContracts.length > 0) {
-            const assignment = await queueService.checkinAndAssignQueue({
-              refCode: fra.transaction_ref,
-              appointmentType: 'FRA',
-              queueSeries: 'FRA',
-              serviceType: 'FRA_REGISTRATION',
-              clientName: fra.fra,
-              transactionRef: fra.transaction_ref,
-              remarks: 'DEFERRED',
-            });
-            fraService
-              .clearStaffNotes(analysis.deferredContracts.map((c) => c.id))
-              .catch(() => {});
-            completeCheckin({
-              queueNumber: assignment.displayNumber,
-              name: fra.fra,
-              serviceType: 'FRA Registration',
-            });
-            return;
-          }
-
-          // Pickup (status='or_issued') — gateless, release day onwards.
-          if (analysis.pickupContracts.length > 0) {
-            await dispatchFraPickup({ kind: 'FRA', fra, clientName: fra.fra });
-            return;
-          }
-
-          // Fresh check-in — re-apply the date window (today through 14 days back,
-          // no future) that the strict lookup used to enforce.
-          if (fra.appointment_date > todaySGT()) {
-            setErrorMsg(`Registration is for ${fra.appointment_date}. Please come on your scheduled day.`);
-            setScreen('ERROR');
-            return;
-          }
-          if (fra.appointment_date < daysAgoSGT(14)) {
-            setErrorMsg('This FRA registration is older than 14 days. Please see the receptionist.');
-            setScreen('ERROR');
-            return;
-          }
-
-          const assignment = await queueService.checkinAndAssignQueue({
-            refCode: value,
-            appointmentType: 'FRA',
-            queueSeries: 'FRA',
-            serviceType: 'FRA_REGISTRATION',
-            clientName: fra.fra,
-            transactionRef: fra.transaction_ref,
-          });
-          fraService.markArrived(fra.transaction_ref).catch(() => {});
-          completeCheckin({
-            queueNumber: assignment.displayNumber,
-            name: fra.fra,
-            serviceType: 'FRA Registration',
-          });
-          return;
-        }
-
-        // OFW / Employer / Accreditation flow.
-        const appt = await appointmentService.lookupByRefCode(value);
-
-        const pickup = await pickupService.evaluateOfwPickup(value, appt);
-        if (pickup) {
-          await dispatchOfwPickup(pickup, value);
-          return;
-        }
-
-        if (!appt) {
-          // No appointment row — fall back to accreditation first-visit path.
-          const submission = await submissionService.lookupByRefCode(value);
-          if (submission && submissionService.isBlocked(submission)) {
-            setErrorMsg('This accreditation submission cannot be checked in.');
-            setScreen('ERROR');
-            return;
-          }
-          if (submission && submissionService.isFirstVisitEligible(submission)) {
-            await dispatchSubmissionFirstVisit(submission);
-            return;
-          }
-
-          setErrorMsg('No appointment or accreditation submission found for this code.');
-          setScreen('ERROR');
-          return;
-        }
-
-        const validation = appointmentService.validateAppointment(appt);
-        if (!validation.ok) {
-          setErrorMsg(validation.message);
-          setScreen('ERROR');
-          return;
-        }
-
-        const dup = await queueService.checkDuplicate(appt.ref_code);
-        if (dup) {
-          setErrorMsg(`Already checked in as Q#${dup.displayNumber}.`);
-          setScreen('ERROR');
-          return;
-        }
-
-        const serviceInfo = await appointmentService.lookupServiceInfo(appt.service_id);
-        const clientName = [appt.ofw_fname, appt.ofw_mname, appt.ofw_lname]
-          .filter(Boolean)
-          .join(' ');
-
+      if (analysis.deferredContracts.length > 0) {
         const assignment = await queueService.checkinAndAssignQueue({
-          refCode: appt.ref_code,
-          appointmentType: 'APPOINTMENT',
-          queueSeries: serviceInfo.series,
-          serviceType: serviceInfo.serviceType,
-          clientName,
-          clientEmail: appt.client_email,
-          appointmentId: appt.id,
-          transactionRef: appt.ref_code,
+          refCode: fra.transaction_ref,
+          appointmentType: 'FRA',
+          queueSeries: 'FRA',
+          serviceType: 'FRA_REGISTRATION',
+          clientName: fra.fra,
+          transactionRef: fra.transaction_ref,
+          remarks: 'DEFERRED',
         });
-
-        const arrivalUpdate =
-          appt.appt_status === 'DEFERRED'
-            ? appointmentService.markArrivedFromDeferred(appt.id)
-            : appointmentService.markArrived(appt.id);
-        arrivalUpdate.catch(() => {});
-
+        fraService
+          .clearStaffNotes(analysis.deferredContracts.map((c) => c.id))
+          .catch(() => {});
         completeCheckin({
           queueNumber: assignment.displayNumber,
-          name: clientName,
-          serviceType: resolveServiceLabel(appt.service_id),
+          name: fra.fra,
+          serviceType: 'FRA Registration',
         });
+        return;
+      }
+
+      if (analysis.pickupContracts.length > 0) {
+        await dispatchFraPickup({ kind: 'FRA', fra, clientName: fra.fra });
+        return;
+      }
+
+      // Fresh check-in — re-apply the today-through-14-days-back window.
+      if (fra.appointment_date > todaySGT()) {
+        setErrorMsg(`Registration is for ${fra.appointment_date}. Please come on your scheduled day.`);
+        setScreen('ERROR');
+        return;
+      }
+      if (fra.appointment_date < daysAgoSGT(14)) {
+        setErrorMsg('This FRA registration is older than 14 days. Please see the receptionist.');
+        setScreen('ERROR');
+        return;
+      }
+
+      const assignment = await queueService.checkinAndAssignQueue({
+        refCode: value,
+        appointmentType: 'FRA',
+        queueSeries: 'FRA',
+        serviceType: 'FRA_REGISTRATION',
+        clientName: fra.fra,
+        transactionRef: fra.transaction_ref,
+      });
+      fraService.markArrived(fra.transaction_ref).catch(() => {});
+      completeCheckin({
+        queueNumber: assignment.displayNumber,
+        name: fra.fra,
+        serviceType: 'FRA Registration',
+      });
+    },
+    [completeCheckin, dispatchFraPickup],
+  );
+
+  const handleAppointment = useCallback(
+    async (appt: AppointmentWithService, value: string) => {
+      // Pickup check first (re-uses the pre-fetched appointment row).
+      const pickup = await pickupService.evaluateOfwPickup(value, appt);
+      if (pickup) {
+        await dispatchOfwPickup(pickup, value);
+        return;
+      }
+
+      const validation = appointmentService.validateAppointment(appt);
+      if (!validation.ok) {
+        setErrorMsg(validation.message);
+        setScreen('ERROR');
+        return;
+      }
+
+      const dup = await queueService.checkDuplicate(appt.ref_code);
+      if (dup) {
+        setErrorMsg(`Already checked in as Q#${dup.displayNumber}.`);
+        setScreen('ERROR');
+        return;
+      }
+
+      const serviceInfo = await appointmentService.lookupServiceInfo(appt.service_id);
+      const clientName = [appt.ofw_fname, appt.ofw_mname, appt.ofw_lname]
+        .filter(Boolean)
+        .join(' ');
+
+      const assignment = await queueService.checkinAndAssignQueue({
+        refCode: appt.ref_code,
+        appointmentType: 'APPOINTMENT',
+        queueSeries: serviceInfo.series,
+        serviceType: serviceInfo.serviceType,
+        clientName,
+        clientEmail: appt.client_email,
+        appointmentId: appt.id,
+        transactionRef: appt.ref_code,
+      });
+
+      const arrivalUpdate =
+        appt.appt_status === 'DEFERRED'
+          ? appointmentService.markArrivedFromDeferred(appt.id)
+          : appointmentService.markArrived(appt.id);
+      arrivalUpdate.catch(() => {});
+
+      completeCheckin({
+        queueNumber: assignment.displayNumber,
+        name: clientName,
+        serviceType: resolveServiceLabel(appt.service_id),
+      });
+    },
+    [completeCheckin, dispatchOfwPickup],
+  );
+
+  const handleSubmission = useCallback(
+    async (submission: pickupService.AccreditationPickup['submission']) => {
+      if (submissionService.isBlocked(submission)) {
+        setErrorMsg('This accreditation submission cannot be checked in.');
+        setScreen('ERROR');
+        return;
+      }
+      if (submissionService.isPickupEligible(submission)) {
+        await dispatchOfwPickup(
+          {
+            kind: 'ACCREDITATION',
+            submission,
+            clientName: submissionService.resolveSubmissionName(submission),
+          },
+          submission.ref_code,
+        );
+        return;
+      }
+      if (submissionService.isFirstVisitEligible(submission)) {
+        await dispatchSubmissionFirstVisit(submission);
+        return;
+      }
+      setErrorMsg('This accreditation submission cannot be checked in.');
+      setScreen('ERROR');
+    },
+    [dispatchOfwPickup, dispatchSubmissionFirstVisit],
+  );
+
+  const doCheckin = useCallback(
+    async (value: string) => {
+      setLoading(true);
+      try {
+        // Unified router: probe all three sources in parallel. Whichever has a
+        // row wins; ambiguity (2+ matches) is rejected to the receptionist.
+        // Pass {strict:false} to FRA so pickup/deferred returnees with QRs older
+        // than the fresh window still resolve.
+        const [appt, fra, submission] = await Promise.all([
+          appointmentService.lookupByRefCode(value),
+          fraService.lookupByRef(value, { strict: false }),
+          submissionService.lookupByRefCode(value),
+        ]);
+
+        const matchCount = (appt ? 1 : 0) + (fra ? 1 : 0) + (submission ? 1 : 0);
+
+        if (matchCount === 0) {
+          setErrorMsg(
+            'No appointment, FRA registration, or accreditation submission found for this code.',
+          );
+          setScreen('ERROR');
+          return;
+        }
+
+        if (matchCount > 1) {
+          setErrorMsg('Ambiguous reference — please see the receptionist.');
+          setScreen('ERROR');
+          return;
+        }
+
+        if (fra) {
+          await handleFra(fra, value);
+          return;
+        }
+        if (appt) {
+          await handleAppointment(appt, value);
+          return;
+        }
+        if (submission) {
+          await handleSubmission(submission);
+          return;
+        }
       } catch (err) {
         console.error('[KioskLayout] Checkin error:', err);
         const raw = err instanceof Error ? err.message : 'Check-in failed. Please try again.';
@@ -341,7 +365,7 @@ export function KioskLayout() {
         setLoading(false);
       }
     },
-    [completeCheckin, dispatchFraPickup, dispatchOfwPickup, dispatchSubmissionFirstVisit],
+    [handleFra, handleAppointment, handleSubmission],
   );
 
   useScanner({

@@ -62,11 +62,16 @@ const FRA_PICKUP_STATUSES: ReadonlySet<string> = new Set(['or_issued']);
 /**
  * Evaluate an OFW/Employer reference code for pickup eligibility.
  *
+ * Pickup applies ONLY to DH appointments (Skilled CV / MDW CV do not have a
+ * "come back to collect" step). FRA pickups are handled separately via
+ * `evaluateFraPickup`; accreditation pickups fall through to the submissions
+ * branch below.
+ *
  * Resolution order:
- *  1. Appointment exists AND status in {submitted, processed, or_issued} —
+ *  1. DH appointment exists AND status in {submitted, processed, or_issued} —
  *     post-Supabase-reduction signal that the client is returning for OR.
  *  2. Legacy DH past appointment with `appt_status='ARRIVED'`.
- *  3. Accreditation submission via fallback.
+ *  3. Accreditation submission via fallback (only when no appointment matches).
  *
  * Returns null when the code does not represent a pickup — caller should fall
  * through to the regular fresh check-in path.
@@ -80,11 +85,13 @@ export async function evaluateOfwPickup(
 
   if (appt) {
     const apptStatus = (appt.status ?? '').toLowerCase();
+    const isPast = appt.appointment_date < today;
+    const isDh = isDhAppointment(appt.service_id);
 
-    // (1) New status-driven pickup — any service whose appointment is in a
-    // pickup-eligible status. The pickup ticket uses the appointment's actual
-    // service label so the cashier still sees "PICKUP - DH" / "PICKUP - SKILLED
-    // WORKER - CV" / etc.
+    // CV (Skilled/MDW) has no pickup step — bail out to fresh check-in.
+    if (!isDh) return null;
+
+    // (1) New status-driven pickup — DH appointment in a pickup-eligible status.
     if (APPOINTMENT_PICKUP_STATUSES.has(apptStatus)) {
       const clientName = [appt.ofw_fname, appt.ofw_mname, appt.ofw_lname]
         .filter(Boolean)
@@ -99,9 +106,7 @@ export async function evaluateOfwPickup(
 
     // (2) Legacy DH branch — past appointment + appt_status='ARRIVED' was the
     // historical "OR is ready for pickup" signal before the new status model.
-    const isPast = appt.appointment_date < today;
-    const isDh = isDhAppointment(appt.service_id);
-    if (isPast && isDh && appt.appt_status === 'ARRIVED') {
+    if (isPast && appt.appt_status === 'ARRIVED') {
       const clientName = [appt.ofw_fname, appt.ofw_mname, appt.ofw_lname]
         .filter(Boolean)
         .join(' ');
@@ -113,7 +118,7 @@ export async function evaluateOfwPickup(
       };
     }
 
-    return null; // appointment exists but not pickup-eligible — caller handles fresh path
+    return null; // DH appointment exists but not pickup-eligible — caller handles fresh path
   }
 
   // (3) No appointment — try accreditation submissions.

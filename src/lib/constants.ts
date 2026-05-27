@@ -137,17 +137,19 @@ export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 const SUBMISSION_REGEX = /^[A-Z0-9]{3,8}-[A-Z0-9]{4,10}$/i;
 
 /**
- * Detect whether a scanned QR value is an appointment ref, FRA transaction_ref,
- * or accreditation submission ref.
+ * Shape-based hint for a scanned/keyed reference. NOT a router.
  *
- * FRA refs come in two formats from AgencyHire:
- *   - UUID with hyphens (36 chars): 550e8400-e29b-41d4-a716-446655440000
- *   - Long alphanumeric (20-30 chars): ABCD1234EFGH5678JKLM9012
+ * The kiosk routes by querying all three tables in parallel
+ * (appointments / fra_registrations / submissions) and dispatching to whichever
+ * row exists — this function may be used for UI hints or optimisations but must
+ * not gate routing. AgencyHire now also issues 8-char alphanumeric FRA refs
+ * which collide with the appointment shape, so shape-based routing is unsafe.
  *
- * Submission refs have a single embedded hyphen:
- *   - XXX####-XXXXXX (12-15 chars total)
- *
- * Appointment refs are 6-10 char uppercase alphanumeric without hyphens: ABC12345.
+ * Known formats:
+ *   - UUID with hyphens (36 chars) — historical FRA: 550e8400-…
+ *   - Long alphanumeric (20-30 chars) — historical FRA: ABCD1234EFGH5678JKLM9012
+ *   - 8-char alphanumeric — current FRA AND appointment shape (ambiguous)
+ *   - XXX####-XXXXXX with single hyphen — submission
  */
 export function detectScanType(value: string): 'APPOINTMENT' | 'FRA' | 'SUBMISSION' | 'UNKNOWN' {
   const trimmed = value.trim();

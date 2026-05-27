@@ -49,14 +49,14 @@ export interface QueueAssignment {
 
 export interface CheckinData {
   readonly refCode: string;
-  readonly appointmentType: 'APPOINTMENT' | 'FRA' | 'WALKIN';
+  readonly appointmentType: 'APPOINTMENT' | 'FRA' | 'WALKIN' | 'PICKUP';
   readonly queueSeries: string;
   readonly serviceType: string;
   readonly clientName: string;
   readonly clientEmail?: string;
   readonly appointmentId?: string;
   readonly transactionRef?: string;
-  /** Optional tag — e.g., "PICKUP", "DEFERRED" — for receptionist tracking */
+  /** Optional tag — e.g., "DEFERRED" — for receptionist tracking. PICKUP intent is now carried by `appointmentType='PICKUP'`. */
   readonly remarks?: string;
 }
 
@@ -71,9 +71,11 @@ export interface DuplicateResult {
 
 /**
  * Check for an existing first-visit check-in today.
+ *
  * Excludes FAILED entries (retryable), DEFERRED entries (re-entry allowed),
- * and rows already tagged 'PICKUP' (those belong to a second-visit check-in
- * which has its own dup guard via checkDuplicateForPickup).
+ * and rows whose appointment_type is 'PICKUP' (second-visit pickups are
+ * driven by the source-table status, not by a kiosk_checkins lookup, so
+ * they do not block a fresh same-day check-in for the same ref).
  */
 export async function checkDuplicate(
   refCode: string,
@@ -83,11 +85,11 @@ export async function checkDuplicate(
 
   const { data, error } = await supabase
     .from('kiosk_checkins')
-    .select('id, queue_number, display_number, status, remarks')
+    .select('id, queue_number, display_number, status, appointment_type')
     .eq('ref_code', refCode)
     .eq('queue_date', today)
     .not('status', 'in', '("FAILED","DEFERRED")')
-    .or('remarks.is.null,remarks.neq.PICKUP')
+    .neq('appointment_type', 'PICKUP')
     .limit(1)
     .maybeSingle();
 
@@ -107,38 +109,6 @@ export async function checkDuplicate(
   }
 
   return null;
-}
-
-/**
- * Check for an existing pickup ticket today.
- * Returns dup only when a PICKUP-remarked row already exists for this code,
- * so the first-visit row does NOT block a second-visit pickup scan.
- */
-export async function checkDuplicateForPickup(
-  refCode: string,
-): Promise<DuplicateResult | null> {
-  const supabase = getSupabaseWriter();
-  const today = todaySGT();
-
-  const { data, error } = await supabase
-    .from('kiosk_checkins')
-    .select('id, queue_number, display_number, status, remarks')
-    .eq('ref_code', refCode)
-    .eq('queue_date', today)
-    .eq('remarks', 'PICKUP')
-    .not('status', 'in', '("FAILED","DEFERRED")')
-    .limit(1)
-    .maybeSingle();
-
-  if (error || !data) return null;
-
-  const row = data as Record<string, unknown>;
-  return {
-    isDuplicate: true,
-    displayNumber: row.display_number as string,
-    queueNumber: row.queue_number as number,
-    isDeferred: false,
-  };
 }
 
 // ─── Queue number generation via RPC ───────────────────────────────────────
@@ -180,8 +150,11 @@ export async function checkinAndAssignQueue(data: CheckinData): Promise<QueueAss
   const queueNumber = await getNextQueueNumber(data.queueSeries);
   const displayNumber = formatQueueDisplay(queueNumber, data.queueSeries);
 
-  // Priority: 2 = regular walk-in, 3 = appointment/FRA/OWWA walk-in
-  const priority = data.appointmentType === 'APPOINTMENT' || data.appointmentType === 'FRA' ? 3
+  // Priority: 2 = regular walk-in, 3 = appointment/FRA/PICKUP/OWWA walk-in
+  const priority =
+    data.appointmentType === 'APPOINTMENT' ||
+    data.appointmentType === 'FRA' ||
+    data.appointmentType === 'PICKUP' ? 3
     : data.queueSeries === 'WALKIN_OWWA' ? 3
     : 2;
 

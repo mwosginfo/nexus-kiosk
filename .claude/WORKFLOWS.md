@@ -162,58 +162,147 @@ Header displays:
 
 ## 4. Kiosk Mode — Self-Service Workflow
 
-Kiosk mode is a state machine with automatic transitions and timeouts.
+Kiosk mode is a single-input state machine. One scan or keyed reference is probed against all three source tables in parallel; whichever has a row wins. No type-select, no phone search, no method picker.
 
 ### State Machine
 ```
-SPLASH → TYPE_SELECT → SEARCH_METHOD → [MANUAL_SEARCH] → SUCCESS / ERROR
-  ↑                                                            │
-  └──────────── auto-reset after 5s (success) / 5s (error) ───┘
-  ↑                                    ↑
-  └──── idle timeout (60s) ────────────┘
+SPLASH → ENTRY → SUCCESS / ERROR
+  ↑                  │
+  └─── auto-reset ───┘
+  (60s idle on ENTRY; success / error screens auto-reset on user action)
 ```
 
 ### 4.1 Splash Screen (SPLASH)
-- Large "SCAN YOUR QR CODE" text + MWO logo
-- Animated visual cue (arrow or pulse)
-- Waiting for QR scan input (auto-focused scanner field)
-- Touch anywhere → transitions to TYPE_SELECT
+- Large "TAP TO START" call to action + MWO branding
+- Touch anywhere → transitions to ENTRY
+- HID scanner input is captured on ENTRY only (not SPLASH) — clients must tap first
 
-### 4.2 Type Selection (TYPE_SELECT)
-- Two large buttons:
-  - **Regular Appointment** — CV, OWWA, DH
-  - **FRA Registration** — Agency hire
-- Back button returns to SPLASH
+### 4.2 Entry Screen (ENTRY)
+- Single reference-code input field (auto-focused)
+- HID scanner emits keystrokes → ENTER triggers submit
+- On-screen alphanumeric keyboard for manual entry (touch-only kiosks)
+  - Includes a `-` key so accreditation refs like `HSW2601-FM00CD` can be typed
+- Helper text: `For Accreditation transaction, key in reference code (XXXXX-XXXXXXXX)`
 - 60-second idle timeout → reset to SPLASH
 
-### 4.3 Search Method (SEARCH_METHOD)
-- Two options:
-  - **Scan QR Code** — shows scanner input
-  - **Enter Reference Number** — transitions to MANUAL_SEARCH
-- 60-second idle timeout → reset to SPLASH
+### 4.3 Unified Router (`doCheckin`)
 
-### 4.4 Manual Search (MANUAL_SEARCH)
-- Text input for ref_code or phone number
-- On-screen keyboard for tablet/touchscreen (no physical keyboard in kiosk mode)
-- Submit triggers same lookup + check-in as receptionist mode
-- 60-second idle timeout → reset to SPLASH
+Every scan/keyed value runs through one router, regardless of shape:
 
-### 4.5 Success Screen (SUCCESS)
-- **Large queue number** in center (56pt, bold, readable from 2 meters)
-- Client name + service type below
-- "Proceed to the waiting area" instruction
-- Auto-prints ticket immediately
-- Auto-resets to SPLASH after 5 seconds
+```
+1. Lookup in parallel:
+   - appointments.ref_code             (via appointmentService.lookupByRefCode)
+   - fra_registrations.transaction_ref (via fraService.lookupByRef, strict:false)
+   - submissions.ref_code              (via submissionService.lookupByRefCode)
 
-### 4.6 Error Screen (ERROR)
-- Error message in large red text
-- "Please see the receptionist for assistance"
-- Auto-resets to SPLASH after 5 seconds
+2. Count rows returned:
+   - 0 matches → ERROR "No appointment, FRA registration, or
+                       accreditation submission found for this code."
+   - 2+ matches → ERROR "Ambiguous reference — please see the receptionist."
+   - Exactly 1 → dispatch to the matching handler
+
+3. Handler dispatch:
+   - fra      → handleFra(fra, value)        (see 4.4)
+   - appt     → handleAppointment(appt, value) (see 4.5)
+   - submission → handleSubmission(submission)  (see 4.6)
+```
+
+**Why parallel/unified:** AgencyHire now generates 8-char alphanumeric `transaction_ref` values for FRA (e.g. `ABCD1234`). Shape-based routing would mis-classify these as appointment refs and miss the FRA registration. `detectScanType` in `lib/constants.ts` is still around as a shape hint but is **not** the router gate.
+
+### 4.4 FRA Handler (`handleFra`)
+
+```
+1. FRA 12pm SGT cutoff (§5.7 in CLAUDE.md)
+   └── Closed → ERROR FRA_CUTOFF_MESSAGE
+   Cutoff is checked AFTER the FRA row resolves — appointment scans
+   after noon never see the FRA cutoff message.
+
+2. Block terminal statuses
+   ├── status='cancelled' → ERROR "FRA registration is cancelled"
+   └── status='moved'     → ERROR "Group has been split — use the new printed QR"
+
+3. Analyse the whole transaction_ref group (`analyzeFraGroup`)
+   ├── any deferredContracts → DEFERRED check-in
+   │   • Insert kiosk_checkins(series='FRA', priority=3, remarks='DEFERRED')
+   │   • Issue A-series queue number
+   │   • Fire-and-forget: clear staff_notes on deferred contracts
+   ├── any pickupContracts (status='or_issued') → PICKUP check-in
+   │   • Insert kiosk_checkins(series='REGULAR', priority=3, remarks='PICKUP')
+   │   • Issue 6000-series queue number
+   │   • Ticket label: "PICKUP - FRA"
+   └── otherwise → FRESH check-in
+       • Re-apply date window: today through 14 days back, no future
+       • Insert kiosk_checkins(series='FRA', priority=3)
+       • Issue A-series queue number
+       • Fire-and-forget: mark FRA arrived
+
+4. Duplicate prevention (§5.9): if a non-deferred kiosk_checkin
+   already exists for this transaction_ref today, return existing Q#.
+```
+
+### 4.5 Appointment Handler (`handleAppointment`)
+
+```
+1. Pickup check (pickupService.evaluateOfwPickup)
+   ├── status ∈ {submitted, processed, or_issued} → PICKUP
+   │   • Insert kiosk_checkins(series='REGULAR', priority=3, remarks='PICKUP')
+   │   • Ticket label: "PICKUP - <SERVICE>" (e.g. PICKUP - DH)
+   └── legacy DH past appointment + appt_status='ARRIVED' → PICKUP
+
+2. Validate (validateAppointment, see CLAUDE.md §5.5)
+   ├── status ∈ {cancelled, completed, no_show} → ERROR
+   ├── appt_status='DEFERRED' AND date >= today-14d → ALLOW (deferred re-checkin)
+   └── otherwise must be appointment_date === today SGT
+
+3. Duplicate prevention (§5.9)
+
+4. Resolve service → series mapping, build client name, generate queue number,
+   insert kiosk_checkins(status='WAITING', priority=3, call_count=0)
+
+5. Fire-and-forget arrival update:
+   ├── appt_status='DEFERRED' → markArrivedFromDeferred (clears staff_notes)
+   └── otherwise              → markArrived
+```
+
+### 4.6 Submission Handler (`handleSubmission`) — Accreditation
+
+```
+1. Blocked → ERROR "This accreditation submission cannot be checked in."
+
+2. Pickup eligible (trans_status ∈ {submitted, processed, or_issued}, case-insensitive)
+   • Insert kiosk_checkins(series='REGULAR', priority=3, remarks='PICKUP')
+   • Ticket label: "PICKUP - ACCREDITATION"
+
+3. First-visit eligible (trans_status='For Submission')
+   • Insert kiosk_checkins(series='REGULAR', priority=3, no remarks)
+   • Ticket label: "Accreditation"
+
+4. Cross-day re-scan is allowed for pickup (§5.8) — the kiosk does NOT
+   mutate the submissions row. A client whose OR is still being prepared
+   can return on any later day until the OR is collected; same-day
+   duplicates are caught by the (queue_date, ref_code, remarks='PICKUP') key.
+```
+
+### 4.7 Success Screen (SUCCESS)
+- **Large queue number** in center (readable from 2 meters)
+- Client name + service type (or `PICKUP - X`) below
+- Auto-prints ticket immediately on entry to this screen
+- Done button returns to SPLASH
+
+### 4.8 Error Screen (ERROR)
+- Error message in large text
+- Common messages:
+  - `"No appointment, FRA registration, or accreditation submission found for this code."`
+  - `"Ambiguous reference — please see the receptionist."`
+  - `"Already checked in as Q#<n>."`
+  - `FRA_CUTOFF_MESSAGE` (post-12pm FRA scan)
+- Retry button returns to ENTRY (preserves session)
 
 ### Kiosk Mode Restrictions
 - No walk-in registration (no physical keyboard for name entry)
 - No appointment browsing (too complex for self-service)
-- No settings access without Ctrl+Shift+S
+- No phone search (removed — reference codes only)
+- No settings access without `Ctrl+Shift+S`
 - Cannot navigate away from kiosk UI
 - Fullscreen + locked window (no title bar, no menu)
 
@@ -231,11 +320,13 @@ SPLASH → TYPE_SELECT → SEARCH_METHOD → [MANUAL_SEARCH] → SUCCESS / ERROR
 ### Validation Errors
 | Error | User Message | Recovery |
 |-------|-------------|----------|
-| Appointment not found | "No appointment found for this QR code" | Scan again or manual entry |
+| No match in any table | "No appointment, FRA registration, or accreditation submission found for this code." | Scan again or manual entry |
+| Ambiguous reference | "Ambiguous reference — please see the receptionist." | Refer to receptionist (cannot self-resolve) |
 | Wrong date | "Appointment is for [date], not today" | Show appointment details |
 | Cancelled | "This appointment has been cancelled" | See receptionist |
 | Already checked in | "Already checked in as Q#[number]" | Show existing queue number |
-| FRA not found | "No FRA registration found" | Check ref, scan again |
+| FRA past cutoff | FRA_CUTOFF_MESSAGE (post-12pm SGT) | Return next working day 9am-12pm |
+| FRA moved | "This FRA group has been split. Please use the new printed QR." | Receptionist re-prints |
 
 ### Hardware Errors
 | Error | Behavior |
