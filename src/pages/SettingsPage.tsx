@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useMode } from '../contexts/ModeContext';
 import { getSupabaseWriter } from '../services/supabase.client';
+import { APP_VERSION } from '../lib/constants';
 
 export function SettingsPage() {
   const { settings, updateSettings, toggleSettings } = useMode();
@@ -237,6 +238,10 @@ export function SettingsPage() {
               Save
             </button>
           </div>
+        </div>
+
+        <div className="pt-4 mt-2 text-center text-xs text-gray-400">
+          Nexus Kiosk — Ver {APP_VERSION}
         </div>
       </div>
     </div>

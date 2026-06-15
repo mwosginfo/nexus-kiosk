@@ -1,3 +1,7 @@
+/** Application version — shown in Settings. Bump this alongside package.json,
+ *  src-tauri/Cargo.toml and src-tauri/tauri.conf.json on every release. */
+export const APP_VERSION = '1.3.1' as const;
+
 /** Supabase service_id that maps to OWWA queue series */
 export const OWWA_SERVICE_ID = '23470e2d-397e-4a24-b3ee-f55ed3fec65c' as const;
 

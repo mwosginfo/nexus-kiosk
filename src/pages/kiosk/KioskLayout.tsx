@@ -254,6 +254,8 @@ export function KioskLayout() {
         .filter(Boolean)
         .join(' ');
 
+      const isDeferredReentry = appt.appt_status === 'DEFERRED';
+
       const assignment = await queueService.checkinAndAssignQueue({
         refCode: appt.ref_code,
         appointmentType: 'APPOINTMENT',
@@ -263,12 +265,15 @@ export function KioskLayout() {
         clientEmail: appt.client_email,
         appointmentId: appt.id,
         transactionRef: appt.ref_code,
+        // APPT_TIME tag drives Nexus's Tier-1 (on-time) classification in
+        // pickNextQueueEntry. Without it the appointment is called last.
+        apptStartTime: appt.start_time,
+        ...(isDeferredReentry ? { remarks: 'DEFERRED' } : {}),
       });
 
-      const arrivalUpdate =
-        appt.appt_status === 'DEFERRED'
-          ? appointmentService.markArrivedFromDeferred(appt.id)
-          : appointmentService.markArrived(appt.id);
+      const arrivalUpdate = isDeferredReentry
+        ? appointmentService.markArrivedFromDeferred(appt.id)
+        : appointmentService.markArrived(appt.id);
       arrivalUpdate.catch(() => {});
 
       completeCheckin({

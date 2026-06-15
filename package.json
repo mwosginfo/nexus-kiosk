@@ -1,6 +1,6 @@
 {
   "name": "nexus-kiosk",
-  "version": "1.0.0",
+  "version": "1.3.1",
   "description": "Standalone check-in kiosk for Nexus — appointments & FRA registration",
   "type": "module",
   "main": "dist-electron/main.js",
