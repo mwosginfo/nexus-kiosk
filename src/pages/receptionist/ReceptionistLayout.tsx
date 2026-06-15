@@ -51,11 +51,13 @@ export function ReceptionistLayout() {
       if (error || !data) return;
 
       const rows = data as ReadonlyArray<{ status: string }>;
+      // Checked in: everyone issued a queue number today (queue_number is NOT NULL,
+      // so every kiosk_checkins row for today qualifies).
       const checkedIn = rows.length;
-      const waiting = rows.filter((r) => r.status === 'WAITING' || r.status === 'CALLED').length;
-      const served = rows.filter((r) =>
-        !['WAITING', 'CALLED', 'PENDING', 'FAILED', 'MISSED', 'DEFERRED'].includes(r.status),
-      ).length;
+      // Waiting: still in the WAITING state.
+      const waiting = rows.filter((r) => r.status === 'WAITING').length;
+      // Served: order received / submitted at the counter.
+      const served = rows.filter((r) => r.status === 'RECEIVED' || r.status === 'SUBMITTED').length;
 
       setStats({ checkedIn, waiting, served });
     } catch {
