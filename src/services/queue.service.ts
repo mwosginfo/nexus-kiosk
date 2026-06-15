@@ -68,6 +68,10 @@ export interface CheckinData {
   readonly remarks?: string;
 }
 
+/** Mirror of Nexus's `APPT_TIME_TAG_REGEX` shape — kept literal here because
+ *  this app is standalone and does not depend on `@nexus/types`. */
+const HHMM_PATTERN = /^\d{2}:\d{2}$/;
+
 /** Build the `remarks` column value, combining the APPT_TIME tag (when
  *  start_time is known) with any caller-supplied annotation like "DEFERRED".
  *  Nexus splits multi-part remarks on `\n`. */
@@ -78,9 +82,10 @@ function buildRemarks(
   const parts: string[] = [];
   if (apptStartTime) {
     const hhmm = apptStartTime.slice(0, 5);
-    if (/^\d{2}:\d{2}$/.test(hhmm)) parts.push(`[APPT_TIME:${hhmm}]`);
+    if (HHMM_PATTERN.test(hhmm)) parts.push(`[APPT_TIME:${hhmm}]`);
   }
-  if (extra && extra.trim().length > 0) parts.push(extra.trim());
+  const trimmedExtra = extra?.trim();
+  if (trimmedExtra) parts.push(trimmedExtra);
   return parts.length > 0 ? parts.join('\n') : null;
 }
 
