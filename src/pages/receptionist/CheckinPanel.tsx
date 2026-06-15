@@ -181,6 +181,7 @@ export function CheckinPanel({
         clientEmail: appt.client_email,
         appointmentId: appt.id,
         transactionRef: appt.ref_code,
+        apptStartTime: appt.start_time,
         remarks: 'DEFERRED',
       });
       appointmentService.markArrivedFromDeferred(appt.id).catch(() => {});
@@ -201,6 +202,7 @@ export function CheckinPanel({
       clientEmail: appt.client_email,
       appointmentId: appt.id,
       transactionRef: appt.ref_code,
+      apptStartTime: appt.start_time,
     });
     appointmentService.markArrived(appt.id).catch(() => {});
     onCheckinComplete(assignment.displayNumber, name);

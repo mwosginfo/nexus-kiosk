@@ -56,8 +56,32 @@ export interface CheckinData {
   readonly clientEmail?: string;
   readonly appointmentId?: string;
   readonly transactionRef?: string;
+  /**
+   * Scheduled `appointments.start_time` (HH:MM or HH:MM:SS). When provided
+   * we emit an `[APPT_TIME:HH:MM]` tag into `remarks` — Nexus's
+   * `pickNextQueueEntry` reads this tag (queue.service.ts:138) to bucket
+   * the entry as Tier 1 (on-time appointment) instead of Tier 3 (walk-in).
+   * Without it, kiosk-checked-in appointments are called LAST.
+   */
+  readonly apptStartTime?: string | null;
   /** Optional tag — e.g., "DEFERRED" — for receptionist tracking. PICKUP intent is now carried by `appointmentType='PICKUP'`. */
   readonly remarks?: string;
+}
+
+/** Build the `remarks` column value, combining the APPT_TIME tag (when
+ *  start_time is known) with any caller-supplied annotation like "DEFERRED".
+ *  Nexus splits multi-part remarks on `\n`. */
+function buildRemarks(
+  apptStartTime: string | null | undefined,
+  extra: string | undefined,
+): string | null {
+  const parts: string[] = [];
+  if (apptStartTime) {
+    const hhmm = apptStartTime.slice(0, 5);
+    if (/^\d{2}:\d{2}$/.test(hhmm)) parts.push(`[APPT_TIME:${hhmm}]`);
+  }
+  if (extra && extra.trim().length > 0) parts.push(extra.trim());
+  return parts.length > 0 ? parts.join('\n') : null;
 }
 
 // ─── Duplicate check ───────────────────────────────────────────────────────
@@ -158,6 +182,8 @@ export async function checkinAndAssignQueue(data: CheckinData): Promise<QueueAss
     : data.queueSeries === 'WALKIN_OWWA' ? 3
     : 2;
 
+  const remarks = buildRemarks(data.apptStartTime, data.remarks);
+
   const { error } = await supabase
     .from('kiosk_checkins')
     .insert({
@@ -175,7 +201,7 @@ export async function checkinAndAssignQueue(data: CheckinData): Promise<QueueAss
       queue_date: today,
       priority,
       call_count: 0,
-      remarks: data.remarks ?? null,
+      remarks,
     });
 
   if (error) throw new Error(`Check-in failed: ${error.message}`);
