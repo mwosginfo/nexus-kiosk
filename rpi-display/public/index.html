@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=640, initial-scale=1" />
+  <title>MWO - OWWA Queue</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- ONLINE mode: iframe fills the panel. Hidden until config resolves. -->
+  <iframe id="online-frame" title="Online queue" hidden></iframe>
+
+  <!-- LOCAL mode: rendered here. -->
+  <main id="local" hidden>
+    <header class="header">
+      <h1>MWO - OWWA QUEUE</h1>
+    </header>
+
+    <div class="colhead">
+      <div>Now Serving</div>
+      <div class="right">Proceed to Counter</div>
+    </div>
+
+    <div class="rows" id="rows">
+      <!-- 5 called rows injected here -->
+    </div>
+
+    <div class="missed-head">
+      <div>Missed</div>
+      <div class="right">Inform counter to re-instate queue</div>
+    </div>
+    <div class="missed" id="missed">
+      <!-- comma-separated missed numbers -->
+    </div>
+
+    <footer class="footer">
+      <span>Migrant Workers Office - Singapore</span>
+      <span id="clock"></span>
+    </footer>
+  </main>
+
+  <!-- Boot / error curtain -->
+  <div id="curtain" class="curtain">
+    <div class="curtain-inner">
+      <div class="curtain-title">MWO - OWWA Queue</div>
+      <div class="curtain-msg" id="curtain-msg">Loading…</div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

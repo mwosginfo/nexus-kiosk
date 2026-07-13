@@ -1,0 +1,20 @@
+[Unit]
+Description=Nexus RPi Queue Display — static server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/rpi-display
+ExecStart=/usr/bin/python3 /opt/rpi-display/server.py
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+Environment=RPI_DISPLAY_HOST=127.0.0.1
+Environment=RPI_DISPLAY_PORT=8080
+Environment=RPI_DISPLAY_CONFIG=/opt/rpi-display/config.json
+
+[Install]
+WantedBy=multi-user.target
