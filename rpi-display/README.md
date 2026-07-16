@@ -17,11 +17,31 @@ restarting anything.
 
 ## Layout
 
-- **Resolution:** portrait 640 × 1080. Set the Pi's HDMI output to that,
-  or rotate the framebuffer with `display_rotate=1` in `/boot/config.txt`
-  if the panel is native landscape.
+- **Fixed 640 × 1080 stage:** the queue UI is pinned to a 640×1080 box
+  anchored at the **top-left** of whatever resolution the Pi outputs, with
+  black everywhere else. On a real 640×1080 panel it fills the screen
+  edge to edge. Do not make the layout fluid — the capture-crop workflow
+  below depends on the fixed stage.
 - **Layout:** 1 header, 1 column-header, **5 called rows**, 1 missed row,
   1 footer — matching the AWS S3 mockup.
+
+## Feeding a video mixer (Resolume) via HDMI-USB capture
+
+When the LED wall is driven by a media server (e.g. Resolume) instead of
+being plugged into the Pi directly:
+
+```
+Pi HDMI0 ──micro-HDMI→HDMI──► HDMI-USB capture dongle ──► Resolume PC ──► wall
+```
+
+- The dongle presents itself as a 1920×1080 monitor; the Pi renders the
+  stage in the top-left corner of that output, black elsewhere.
+- In Resolume: Sources → Capture Devices → the dongle → **crop the input
+  to x:0 y:0 w:640 h:1080** → map onto the wall. No scaling needed.
+- The Resolume PC needs no network access — the Pi does all the rendering
+  and needs LAN to Nexus (LOCAL mode) / internet (ONLINE mode).
+- Skip any screen-rotation setup in this configuration; the portrait
+  geometry lives inside the stage.
 
 ## Modes
 

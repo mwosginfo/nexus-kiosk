@@ -1,4 +1,12 @@
-/* Nexus RPi Queue Display — 640 x 1080 portrait, LED-panel readable. */
+/* Nexus RPi Queue Display — fixed 640 x 1080 portrait stage.
+ *
+ * The queue UI is pinned to a 640x1080 box anchored at the TOP-LEFT of the
+ * screen, with black everywhere else. On a real 640x1080 panel this renders
+ * edge to edge, identical to a fluid layout. On a larger output — e.g. an
+ * HDMI-USB capture dongle that forces the Pi to 1920x1080 for a Resolume
+ * workflow — the operator crops the capture input to x:0 y:0 w:640 h:1080
+ * and gets a pixel-perfect image with no scaling. Do not make the layout
+ * fluid again; the crop contract depends on this fixed stage. */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -8,20 +16,22 @@
 [hidden] { display: none !important; }
 html, body { width: 100%; height: 100%; overflow: hidden; user-select: none; }
 body {
-  background: #4AABE0;
+  background: #000; /* outside the stage — invisible on LED / cropped away */
   color: #1a1a1a;
   font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
 }
 
-/* ── ONLINE mode iframe fills the panel ──────────────────────────── */
+/* ── ONLINE mode iframe fills the stage ──────────────────────────── */
 #online-frame {
-  position: fixed; inset: 0; width: 100vw; height: 100vh;
+  position: fixed; top: 0; left: 0; width: 640px; height: 1080px;
   border: 0; background: #4AABE0;
 }
 
-/* ── LOCAL mode layout (640 x 1080 portrait) ─────────────────────── */
+/* ── LOCAL mode layout (fixed 640 x 1080 stage) ──────────────────── */
 #local {
-  min-height: 100vh;
+  width: 640px; height: 1080px;
+  overflow: hidden;
+  background: #4AABE0;
   display: flex; flex-direction: column;
   padding: 12px;
   gap: 8px;
@@ -139,9 +149,10 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* Curtain (boot + error state) */
+/* Curtain (boot + error state) — covers the stage, not the full screen,
+   so "reconnecting" messages stay inside the Resolume crop region. */
 .curtain {
-  position: fixed; inset: 0;
+  position: fixed; top: 0; left: 0; width: 640px; height: 1080px;
   background: #1B3A6B;
   color: white;
   display: flex; align-items: center; justify-content: center;
