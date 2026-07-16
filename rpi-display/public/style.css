@@ -1,6 +1,11 @@
 /* Nexus RPi Queue Display — 640 x 1080 portrait, LED-panel readable. */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* The mode switcher toggles the `hidden` attribute on #local / #online-frame.
+   Author display rules (e.g. #local { display: flex }) would otherwise beat
+   the UA's [hidden] rule on specificity — force it. */
+[hidden] { display: none !important; }
 html, body { width: 100%; height: 100%; overflow: hidden; user-select: none; }
 body {
   background: #4AABE0;
