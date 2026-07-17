@@ -15,13 +15,22 @@ ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0
 # Resolve the browser at launch: Raspberry Pi OS Bookworm ships it as
 # `chromium`, older releases (Bullseye/Buster) as `chromium-browser`.
 # `command -v` picks whichever exists so the unit works across versions.
+# --incognito: use a throwaway profile so a stale profile lock (e.g. from a
+#   prior crash or a manual chromium launch during setup) can't wedge startup
+#   into a white-screen crash-loop. The display is stateless, so nothing is
+#   lost by not persisting a profile.
+# --password-store=basic: skip the gnome-keyring unlock prompt, which would
+#   otherwise block an unattended kiosk on first launch.
 ExecStart=/bin/sh -c 'exec "$(command -v chromium-browser || command -v chromium)" \
   --kiosk \
+  --incognito \
   --noerrdialogs \
   --nofirstrun \
+  --password-store=basic \
   --disable-infobars \
   --disable-features=TranslateUI \
   --disable-session-crashed-bubble \
+  --disable-restore-session-state \
   --disable-pinch \
   --overscroll-history-navigation=0 \
   --check-for-update-interval=31536000 \
