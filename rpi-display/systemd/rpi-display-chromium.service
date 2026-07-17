@@ -9,7 +9,13 @@ Type=simple
 User=pi
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/pi/.Xauthority
-# Wait for the local static server to accept connections, then launch
+# Wait for the X server to be up (socket present) and give the window
+# manager a few seconds to settle. At boot the service can fire before the
+# display/compositor is ready; Chromium then launches but paints a blank
+# white window (works fine on a later manual restart). This wait removes
+# that boot-time race.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do [ -S /tmp/.X11-unix/X0 ] && { sleep 3; exit 0; }; sleep 1; done; exit 0'
+# Then wait for the local static server to accept connections, and launch
 # Chromium in kiosk mode against it. Restart on crash.
 ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:8080/ >/dev/null && exit 0; sleep 1; done; exit 1'
 # Resolve the browser at launch: Raspberry Pi OS Bookworm ships it as
