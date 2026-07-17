@@ -12,9 +12,13 @@ Environment=XAUTHORITY=/home/pi/.Xauthority
 # Wait for the local static server to accept connections, then launch
 # Chromium in kiosk mode against it. Restart on crash.
 ExecStartPre=/bin/sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://127.0.0.1:8080/ >/dev/null && exit 0; sleep 1; done; exit 1'
-ExecStart=/usr/bin/chromium-browser \
+# Resolve the browser at launch: Raspberry Pi OS Bookworm ships it as
+# `chromium`, older releases (Bullseye/Buster) as `chromium-browser`.
+# `command -v` picks whichever exists so the unit works across versions.
+ExecStart=/bin/sh -c 'exec "$(command -v chromium-browser || command -v chromium)" \
   --kiosk \
   --noerrdialogs \
+  --nofirstrun \
   --disable-infobars \
   --disable-features=TranslateUI \
   --disable-session-crashed-bubble \
@@ -23,7 +27,7 @@ ExecStart=/usr/bin/chromium-browser \
   --check-for-update-interval=31536000 \
   --window-position=0,0 \
   --window-size=640,1080 \
-  http://127.0.0.1:8080/
+  http://127.0.0.1:8080/'
 Restart=always
 RestartSec=5
 

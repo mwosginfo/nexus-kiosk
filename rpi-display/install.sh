@@ -28,8 +28,17 @@ KIOSK_USER="${KIOSK_USER:-pi}"
 
 echo "[1/6] Installing OS packages…"
 apt-get update -y
-apt-get install -y --no-install-recommends \
-  chromium-browser python3 unclutter curl
+apt-get install -y --no-install-recommends python3 unclutter curl
+# The Chromium package is named `chromium` on Raspberry Pi OS Bookworm and
+# `chromium-browser` on older releases. Install whichever the distro offers.
+if apt-get install -y --no-install-recommends chromium; then
+  echo "  installed 'chromium'"
+elif apt-get install -y --no-install-recommends chromium-browser; then
+  echo "  installed 'chromium-browser'"
+else
+  echo "  ERROR: could not install chromium or chromium-browser" >&2
+  exit 1
+fi
 
 echo "[2/6] Copying app to ${TARGET_DIR}…"
 mkdir -p "${TARGET_DIR}"
