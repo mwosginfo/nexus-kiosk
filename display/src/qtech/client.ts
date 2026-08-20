@@ -62,6 +62,40 @@ export class QtechClient {
     return this.post('/call', body, started);
   }
 
+  /**
+   * One attempt, returning the untouched HTTP status and body.
+   *
+   * Used only by the conformance CLI. Their Phase 1 exit criterion is that
+   * "every response matches the published schema and error codes", which
+   * requires seeing the raw response rather than this client's classification
+   * of it. No retry: a conformance check wants exactly one request.
+   */
+  async rawCall(event: CallEvent): Promise<{
+    readonly httpStatus: number;
+    readonly body: string;
+    readonly latencyMs: number;
+    readonly request: CallRequest;
+  }> {
+    const body = this.buildRequest(event);
+    const started = Date.now();
+    const res = await this.fetchWithTimeout(`${this.baseUrl()}/call`, {
+      method: 'POST',
+      headers: {
+        Authorization: this.authHeader,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await res.text().catch(() => '');
+    return {
+      httpStatus: res.status,
+      body: text,
+      latencyMs: Date.now() - started,
+      request: body,
+    };
+  }
+
   /** Liveness + branch resolution check (§1). Used as the periodic probe. */
   async health(): Promise<boolean> {
     if (this.config.dryRun) return true;

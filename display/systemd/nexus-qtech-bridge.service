@@ -34,7 +34,11 @@ ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6
+# AF_UNIX and AF_NETLINK are required, not optional: glibc's resolver opens a
+# netlink socket to enumerate interfaces, and blocking AF_UNIX breaks common
+# runtime paths. Restricting to these four still blocks AF_PACKET and raw
+# socket families, which is the point.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 RestrictNamespaces=true
 RestrictSUIDSGID=true
 LockPersonality=true

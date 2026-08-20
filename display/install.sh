@@ -38,12 +38,16 @@ if ! id -u "$RUN_USER" >/dev/null 2>&1; then
 fi
 
 # ── Build ───────────────────────────────────────────────────────────────────
+# Install everything (tsc is a devDependency), compile, then prune the build
+# tools back out before deploying. Installing --omit=dev and adding tsc
+# afterwards would leave the TypeScript compiler in the node_modules that gets
+# copied to /opt — tens of MB of build tooling shipped to a runtime host.
 echo "==> building"
 cd "$SRC_DIR"
-npm ci --omit=dev >/dev/null 2>&1 || npm install --omit=dev
-# devDependencies are needed for tsc; install them only for the build step.
-npm install --no-save typescript@^5.7.0 @types/node@^22.10.0
+npm ci
 npx tsc -p tsconfig.json
+echo "==> pruning build tooling"
+npm prune --omit=dev
 
 # ── Deploy ──────────────────────────────────────────────────────────────────
 echo "==> installing to ${APP_DIR}"
@@ -54,6 +58,7 @@ cp -r node_modules "$APP_DIR/"
 cp package.json "$APP_DIR/"
 cp README.md "$APP_DIR/" 2>/dev/null || true
 cp -r sql "$APP_DIR/" 2>/dev/null || true
+cp -r docs "$APP_DIR/" 2>/dev/null || true
 chown -R root:root "$APP_DIR"
 chmod -R go-w "$APP_DIR"
 

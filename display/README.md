@@ -133,6 +133,10 @@ either table.
 
 ## Install
 
+**Full runbook: `docs/INSTALL.md`** — blank Pi to a bridge Qtech can test
+against, including what to request from them, how to drive their acceptance
+phases, and troubleshooting. The short version follows.
+
 Apply the schema once, from the Supabase SQL editor:
 
 ```
@@ -170,6 +174,21 @@ See `.env.example` for the full annotated list. The ones that matter:
 
 `DRY_RUN=true` is the intended way to rehearse against live Nexus traffic
 before a display is connected.
+
+## Conformance CLI
+
+Qtech's acceptance procedure requires calls driven from our system. Sending
+them through the live queue would mean calling real clients, so:
+
+```bash
+sudo env $(grep -v '^#' /etc/nexus-qtech-bridge.env | xargs) \
+  node /opt/nexus-qtech-bridge/dist/src/cli/send-call.js --queue A045 --counter 7
+```
+
+Same credentials and payload builder as the bridge, one request, no retry, raw
+response printed. `--event <uuid>` twice tests duplicate suppression; a new
+`--event` with the same `--ticket` tests a recall. `--health` probes liveness.
+Exits non-zero on a business error, which arrives inside an HTTP 200.
 
 ## Operating
 
