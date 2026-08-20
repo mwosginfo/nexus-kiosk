@@ -1,0 +1,45 @@
+[Unit]
+Description=Nexus to Qtech queue-call bridge
+Documentation=file:/opt/nexus-qtech-bridge/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qtechbridge
+Group=qtechbridge
+WorkingDirectory=/opt/nexus-qtech-bridge
+
+# Credentials live in a root-owned 0600 file, not in the unit and not in the
+# repo, and can be replaced without touching code (Qtech item 7.2).
+EnvironmentFile=/etc/nexus-qtech-bridge.env
+Environment=NODE_ENV=production
+
+ExecStart=/usr/bin/node /opt/nexus-qtech-bridge/dist/src/index.js
+
+# Always come back. A bridge that stays down is a wall that stays stale — and
+# the health row going stale is exactly what tells Nexus that happened.
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=qtech-bridge
+
+# Hardening — the process needs outbound HTTPS and nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+ReadWritePaths=
+
+[Install]
+WantedBy=multi-user.target
