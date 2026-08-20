@@ -175,6 +175,13 @@ See `.env.example` for the full annotated list. The ones that matter:
 `DRY_RUN=true` is the intended way to rehearse against live Nexus traffic
 before a display is connected.
 
+## Handover
+
+`docs/handover.html` is the written handover for Qtech and MWO — architecture,
+interface, delivery behaviour, health monitoring, conformance, open questions
+and the responsibility split. Open it in a browser, or read the source docs
+below for the same material in working form.
+
 ## Conformance CLI
 
 Qtech's acceptance procedure requires calls driven from our system. Sending
@@ -221,6 +228,13 @@ single call, per-counter ordering, and a closed set of payload keys.
 - No inbound anything. The interface is one-way; the bridge listens on nothing.
 - If IP allow-listing is adopted, the egress address to disclose to Qtech is
   the office's public IP as seen from the Pi.
+
+## Handover
+
+`docs/handover.html` is the written handover for Qtech and MWO — architecture,
+interface, delivery behaviour, health monitoring, conformance, open questions
+and the responsibility split. Open it in a browser, or read the source docs
+below for the same material in working form.
 
 ## Conformance
 

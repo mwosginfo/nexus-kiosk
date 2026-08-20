@@ -1,0 +1,959 @@
+<title>Nexus–Qtech Bridge Handover</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap">
+
+<style>
+:root {
+  --bg:        #F4F6F6;
+  --surface:   #FFFFFF;
+  --surface-2: #ECF0F0;
+  --border:    #D8DEDE;
+  --border-2:  #C2CBCB;
+  --text:      #131A1B;
+  --text-2:    #4C5859;
+  --text-3:    #6E7A7B;
+  --accent:    #0F6E72;
+  --accent-2:  #0B5457;
+  --accent-bg: #E2EFEF;
+  --ok:        #2F6B3A;
+  --ok-bg:     #E3EFE5;
+  --warn:      #8A5D06;
+  --warn-bg:   #F6ECD8;
+  --crit:      #A32620;
+  --crit-bg:   #F7E3E2;
+  --shadow:    0 1px 2px rgba(19,26,27,.06), 0 8px 24px -12px rgba(19,26,27,.18);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:        #0E1415;
+    --surface:   #151D1E;
+    --surface-2: #1C2627;
+    --border:    #263233;
+    --border-2:  #33403F;
+    --text:      #E7EDED;
+    --text-2:    #A9B6B6;
+    --text-3:    #859394;
+    --accent:    #5CC2C7;
+    --accent-2:  #8AD8DC;
+    --accent-bg: #16302F;
+    --ok:        #79C088;
+    --ok-bg:     #172C1C;
+    --warn:      #DDB05A;
+    --warn-bg:   #2E2413;
+    --crit:      #E88B84;
+    --crit-bg:   #331A19;
+    --shadow:    0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  }
+}
+:root[data-theme="dark"] {
+  --bg:        #0E1415;
+  --surface:   #151D1E;
+  --surface-2: #1C2627;
+  --border:    #263233;
+  --border-2:  #33403F;
+  --text:      #E7EDED;
+  --text-2:    #A9B6B6;
+  --text-3:    #859394;
+  --accent:    #5CC2C7;
+  --accent-2:  #8AD8DC;
+  --accent-bg: #16302F;
+  --ok:        #79C088;
+  --ok-bg:     #172C1C;
+  --warn:      #DDB05A;
+  --warn-bg:   #2E2413;
+  --crit:      #E88B84;
+  --crit-bg:   #331A19;
+  --shadow:    0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "IBM Plex Serif", Georgia, serif;
+  font-size: 16.5px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 28px 96px;
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 56px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .page { grid-template-columns: minmax(0,1fr); gap: 0; padding: 0 20px 64px; }
+  .toc { position: static !important; margin-bottom: 40px; }
+}
+
+/* ── Masthead ─────────────────────────────────────────── */
+.masthead {
+  grid-column: 1 / -1;
+  border-bottom: 2px solid var(--text);
+  padding: 56px 0 24px;
+  margin-bottom: 44px;
+}
+.eyebrow {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 18px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+h1 {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: clamp(30px, 4.6vw, 46px);
+  font-weight: 700;
+  letter-spacing: -.021em;
+  line-height: 1.08;
+  text-wrap: balance;
+  margin: 0 0 14px;
+}
+.standfirst {
+  font-size: 19px;
+  line-height: 1.5;
+  color: var(--text-2);
+  max-width: 60ch;
+  margin: 0 0 30px;
+}
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 34px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.meta b {
+  display: block;
+  font-weight: 500;
+  font-size: 10.5px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  opacity: .75;
+  margin-bottom: 2px;
+}
+.meta span { color: var(--text-2); }
+
+/* ── Table of contents ────────────────────────────────── */
+.toc {
+  position: sticky;
+  top: 28px;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.toc h2 {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin: 0 0 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.toc a {
+  color: var(--text-2);
+  text-decoration: none;
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 4px;
+  border-radius: 3px;
+}
+.toc a:hover { color: var(--accent); }
+.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.toc .n { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--text-3); }
+.toc .app { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border); }
+
+/* ── Sections ─────────────────────────────────────────── */
+main { min-width: 0; }
+section { margin-bottom: 60px; scroll-margin-top: 24px; }
+section > h2 {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: -.014em;
+  line-height: 1.2;
+  text-wrap: balance;
+  margin: 0 0 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 46px 1fr;
+  align-items: baseline;
+}
+section > h2 .n {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--accent);
+}
+h3 {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 16.5px;
+  font-weight: 600;
+  letter-spacing: -.005em;
+  margin: 32px 0 10px;
+  color: var(--text);
+}
+h4 {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin: 24px 0 8px;
+}
+p { margin: 0 0 15px; max-width: 68ch; }
+ul, ol.body { margin: 0 0 15px; padding-left: 22px; max-width: 66ch; }
+li { margin-bottom: 7px; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+strong { font-weight: 600; }
+code {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: .855em;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: .1em .34em;
+  white-space: nowrap;
+}
+pre {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  padding: 16px 18px;
+  overflow-x: auto;
+  margin: 0 0 18px;
+}
+pre code { background: none; border: 0; padding: 0; font-size: inherit; white-space: pre; }
+
+/* ── Callouts ─────────────────────────────────────────── */
+.callout {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  background: var(--surface);
+  border-radius: 4px;
+  padding: 18px 20px;
+  margin: 0 0 20px;
+  box-shadow: var(--shadow);
+}
+.callout.gap { border-left-color: var(--warn); }
+.callout > :last-child { margin-bottom: 0; }
+.callout p { max-width: 64ch; }
+.callout-label {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 7px;
+}
+.callout.gap .callout-label { color: var(--warn); }
+
+/* ── Summary grid ─────────────────────────────────────── */
+.summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  margin: 0 0 26px;
+}
+.summary div { background: var(--surface); padding: 15px 17px; }
+.summary dt {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 5px;
+}
+.summary dd {
+  margin: 0;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 14.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+/* ── Tables ───────────────────────────────────────────── */
+.tw { overflow-x: auto; margin: 0 0 20px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-family: "IBM Plex Sans", system-ui, sans-serif; font-size: 13.8px; line-height: 1.45; }
+th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 10.5px;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  background: var(--surface-2);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+td { padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: top; color: var(--text-2); }
+tbody tr:last-child td { border-bottom: 0; }
+td:first-child { color: var(--text); font-weight: 500; }
+td code, th code { font-size: .9em; white-space: nowrap; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ── Pills ────────────────────────────────────────────── */
+.pill {
+  display: inline-block;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 2.5px 8px;
+  border-radius: 3px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.pill.ok    { background: var(--ok-bg);    color: var(--ok);    border-color: color-mix(in srgb, var(--ok) 28%, transparent); }
+.pill.warn  { background: var(--warn-bg);  color: var(--warn);  border-color: color-mix(in srgb, var(--warn) 28%, transparent); }
+.pill.crit  { background: var(--crit-bg);  color: var(--crit);  border-color: color-mix(in srgb, var(--crit) 28%, transparent); }
+.pill.info  { background: var(--accent-bg);color: var(--accent);border-color: color-mix(in srgb, var(--accent) 28%, transparent); }
+.pill.mute  { background: var(--surface-2);color: var(--text-3);border-color: var(--border-2); }
+
+/* ── Diagram ──────────────────────────────────────────── */
+figure { margin: 0 0 22px; }
+figure svg { width: 100%; height: auto; display: block; }
+figcaption {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 12.5px;
+  color: var(--text-3);
+  margin-top: 10px;
+  max-width: 64ch;
+}
+.dgm-wrap {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  padding: 22px 20px;
+  overflow-x: auto;
+}
+.dgm-box { font-family: "IBM Plex Sans", system-ui, sans-serif; font-size: 12.5px; font-weight: 600; }
+.dgm-sub { font-family: "IBM Plex Mono", monospace; font-size: 10px; }
+.dgm-lbl { font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: .04em; }
+
+/* ── Footer ───────────────────────────────────────────── */
+footer {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border);
+  padding-top: 22px;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 12.5px;
+  color: var(--text-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 30px;
+}
+
+@media print {
+  .toc { display: none; }
+  .page { grid-template-columns: 1fr; }
+  section { break-inside: avoid-page; }
+}
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow"><span>Integration handover</span><span>·</span><span>MWO–OWWA Singapore</span><span>·</span><span>Qtech Queue Display</span></p>
+    <h1>Nexus&ndash;Qtech Queue Call Bridge</h1>
+    <p class="standfirst">A one-way link that forwards every queue call from Nexus to the Qtech display. Built to the Qtech integration response of 5&nbsp;August&nbsp;2026, and ready for their Phase&nbsp;0 onboarding.</p>
+    <div class="meta">
+      <div><b>Component</b><span>nexus-kiosk / display</span></div>
+      <div><b>Branch</b><span>claude/nexus-rpi-bridge-setup-kof9gw</span></div>
+      <div><b>Commits</b><span class="num">14e132b, 819e697</span></div>
+      <div><b>Runs on</b><span>Raspberry Pi, headless</span></div>
+      <div><b>Status</b><span>Ready for Phase 0</span></div>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Sections">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#s1"><span class="n">1</span><span>Purpose and scope</span></a></li>
+      <li><a href="#s2"><span class="n">2</span><span>Architecture</span></a></li>
+      <li><a href="#s3"><span class="n">3</span><span>What is sent</span></a></li>
+      <li><a href="#s4"><span class="n">4</span><span>Detecting a call</span></a></li>
+      <li><a href="#s5"><span class="n">5</span><span>Delivery behaviour</span></a></li>
+      <li><a href="#s6"><span class="n">6</span><span>Security</span></a></li>
+      <li><a href="#s7"><span class="n">7</span><span>Health monitoring</span></a></li>
+      <li><a href="#s8"><span class="n">8</span><span>Deployment</span></a></li>
+      <li><a href="#s9"><span class="n">9</span><span>Acceptance testing</span></a></li>
+      <li><a href="#s10"><span class="n">10</span><span>Conformance</span></a></li>
+      <li><a href="#s11"><span class="n">11</span><span>Open questions</span></a></li>
+      <li><a href="#s12"><span class="n">12</span><span>Responsibilities</span></a></li>
+      <li class="app"><a href="#a1"><span class="n">A</span><span>Configuration</span></a></li>
+      <li><a href="#a2"><span class="n">B</span><span>Codes</span></a></li>
+      <li><a href="#a3"><span class="n">C</span><span>File map</span></a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <!-- ══ At a glance ══ -->
+    <section id="glance">
+      <dl class="summary">
+        <div><dt>Endpoints used</dt><dd>POST /call<br>GET /health</dd></div>
+        <div><dt>Fields per call</dt><dd>6 required<br>1 optional</dd></div>
+        <div><dt>Personal data</dt><dd>None</dd></div>
+        <div><dt>Inbound ports</dt><dd>None</dd></div>
+        <div><dt>Test coverage</dt><dd class="num">52 tests + smoke</dd></div>
+        <div><dt>Open gaps</dt><dd>1 &mdash; their item&nbsp;9</dd></div>
+      </dl>
+
+      <div class="callout gap">
+        <p class="callout-label">Read this first</p>
+        <p>One requirement is <strong>not fully met</strong>. Qtech item&nbsp;7.9 asks for an <em>operator-visible</em> alert when a call fails after its final retry, so counter staff know the display may be stale. The bridge detects the failure, logs it, records it, and exposes it as a health state &mdash; but the Nexus screen badge that would put it in front of staff has not been built. That is a change to Nexus, not to this component. It should close before Phase&nbsp;5 sign-off. Everything else is met.</p>
+      </div>
+    </section>
+
+    <!-- ══ 1 ══ -->
+    <section id="s1">
+      <h2><span class="n">1</span><span>Purpose and scope</span></h2>
+
+      <p>MWO&ndash;OWWA Singapore runs its queue in <strong>Nexus</strong>, an internal case-management system on the office LAN. The public-facing queue display is supplied and operated by <strong>Qtech</strong>, hosted on AWS in Singapore. The two systems have no direct connection and are not on the same network.</p>
+
+      <p>This bridge closes that gap. When a member of staff calls a number to a counter in Nexus, the bridge forwards that call to Qtech, and the number appears on the wall with a chime and a voice announcement.</p>
+
+      <h3>In scope</h3>
+      <p>Exactly the two endpoints the Qtech integration response defines, and nothing else:</p>
+      <ul>
+        <li><code>POST /call</code> &mdash; sent whenever a number is called to a counter, including a deliberate recall.</li>
+        <li><code>GET /health</code> &mdash; a periodic liveness probe.</li>
+      </ul>
+
+      <h3>Explicitly out of scope</h3>
+      <p>Call is the only event the Qtech interface accepts. There is no missed state, no completed state, no instruction to clear a counter, and no control over how anything is rendered. Accordingly:</p>
+      <ul>
+        <li><strong>Missed, deferred, re-instated and served states are not transmitted.</strong> They remain inside Nexus, visible to staff only.</li>
+        <li><strong>Nexus does not control the display.</strong> Layout, fonts, colours, chime and voice are entirely Qtech&rsquo;s, configured on their side.</li>
+        <li><strong>No queue features are ported.</strong> Estimated waiting time, missed lists and counter status stay internal.</li>
+      </ul>
+
+      <div class="callout">
+        <p class="callout-label">Consequence worth agreeing explicitly</p>
+        <p>Because there is no clear instruction, <strong>a number remains on screen against its counter until that counter calls someone else</strong> &mdash; including after the client has been served, and overnight after close of business. Whatever is showing at 18:00 is still showing the next morning until the first call. This is Qtech&rsquo;s documented behaviour, not a defect, but it differs from how the previous display behaved and MWO should confirm it is acceptable.</p>
+      </div>
+    </section>
+
+    <!-- ══ 2 ══ -->
+    <section id="s2">
+      <h2><span class="n">2</span><span>Architecture</span></h2>
+
+      <figure>
+        <div class="dgm-wrap">
+          <svg viewBox="0 0 880 250" role="img" aria-label="Data flow: Nexus writes to Supabase, the bridge reads Supabase and posts to Qtech, which drives the wall. The bridge writes a health row back to Supabase which Nexus reads.">
+            <defs>
+              <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--border-2)"/>
+              </marker>
+              <marker id="arA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/>
+              </marker>
+            </defs>
+
+            <!-- lane label -->
+            <text x="8" y="24" class="dgm-lbl" fill="var(--text-3)">OFFICE LAN</text>
+            <text x="332" y="24" class="dgm-lbl" fill="var(--text-3)">INTERNET</text>
+
+            <!-- boxes -->
+            <g>
+              <rect x="8" y="44" width="150" height="62" rx="4" fill="var(--surface-2)" stroke="var(--border-2)"/>
+              <text x="83" y="70" text-anchor="middle" class="dgm-box" fill="var(--text)">Nexus</text>
+              <text x="83" y="88" text-anchor="middle" class="dgm-sub" fill="var(--text-3)">staff calls a number</text>
+            </g>
+            <g>
+              <rect x="222" y="44" width="176" height="62" rx="4" fill="var(--surface-2)" stroke="var(--border-2)"/>
+              <text x="310" y="70" text-anchor="middle" class="dgm-box" fill="var(--text)">Supabase</text>
+              <text x="310" y="88" text-anchor="middle" class="dgm-sub" fill="var(--text-3)">kiosk_checkins</text>
+            </g>
+            <g>
+              <rect x="462" y="44" width="160" height="62" rx="4" fill="var(--accent-bg)" stroke="var(--accent)"/>
+              <text x="542" y="70" text-anchor="middle" class="dgm-box" fill="var(--accent)">Bridge</text>
+              <text x="542" y="88" text-anchor="middle" class="dgm-sub" fill="var(--accent)">Raspberry Pi</text>
+            </g>
+            <g>
+              <rect x="686" y="44" width="150" height="62" rx="4" fill="var(--surface-2)" stroke="var(--border-2)"/>
+              <text x="761" y="70" text-anchor="middle" class="dgm-box" fill="var(--text)">Qtech</text>
+              <text x="761" y="88" text-anchor="middle" class="dgm-sub" fill="var(--text-3)">AWS ap-southeast-1</text>
+            </g>
+            <g>
+              <rect x="686" y="158" width="150" height="52" rx="4" fill="var(--surface-2)" stroke="var(--border-2)"/>
+              <text x="761" y="189" text-anchor="middle" class="dgm-box" fill="var(--text)">Display wall</text>
+            </g>
+
+            <!-- forward arrows -->
+            <line x1="160" y1="75" x2="216" y2="75" stroke="var(--border-2)" stroke-width="1.5" marker-end="url(#ar)"/>
+            <line x1="400" y1="75" x2="456" y2="75" stroke="var(--border-2)" stroke-width="1.5" marker-end="url(#ar)"/>
+            <line x1="624" y1="75" x2="680" y2="75" stroke="var(--accent)" stroke-width="1.75" marker-end="url(#arA)"/>
+            <text x="652" y="66" text-anchor="middle" class="dgm-lbl" fill="var(--accent)">HTTPS</text>
+            <line x1="761" y1="108" x2="761" y2="152" stroke="var(--border-2)" stroke-width="1.5" marker-end="url(#ar)"/>
+
+            <!-- health return path -->
+            <path d="M 542 108 L 542 140 L 310 140 L 310 112" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arA)"/>
+            <text x="426" y="134" text-anchor="middle" class="dgm-lbl" fill="var(--accent)">health row</text>
+
+            <path d="M 262 140 L 200 140 L 200 180 L 83 180 L 83 112" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arA)"/>
+            <text x="150" y="196" text-anchor="middle" class="dgm-lbl" fill="var(--accent)">Nexus reads state</text>
+
+            <text x="542" y="232" text-anchor="middle" class="dgm-sub" fill="var(--text-3)">no connection between the bridge and Nexus in either direction</text>
+          </svg>
+        </div>
+        <figcaption>Solid lines carry queue calls. Dashed lines carry the bridge&rsquo;s own health, which reaches Nexus through Supabase rather than directly.</figcaption>
+      </figure>
+
+      <h3>Why a Raspberry Pi</h3>
+      <p>Nexus runs on a Synology NAS on the office LAN and holds all client records. Putting outbound internet access on that host to reach a display vendor is unnecessary exposure. The Pi is a small, isolated, single-purpose device that holds no client data and can be rebuilt from scratch in half an hour.</p>
+
+      <h3>Why the bridge does not talk to Nexus</h3>
+      <p>Nexus already publishes queue state to Supabase for its own purposes &mdash; that is how the check-in kiosks and queue displays work today. The bridge reads that existing stream. Nothing was added to Nexus, no port was opened on the NAS, and the bridge holds no credential that would let it reach anything on the office LAN.</p>
+      <p>Health travels back the same way: the bridge keeps a row current in Supabase, and Nexus reads it. Neither system opens a socket to the other.</p>
+    </section>
+
+    <!-- ══ 3 ══ -->
+    <section id="s3">
+      <h2><span class="n">3</span><span>What is sent</span></h2>
+
+      <p>Every call is a single JSON POST. This is the complete payload &mdash; there are no other fields, and the delivery tests assert that the key set is exactly this:</p>
+
+<pre><code>POST https://&lt;tenant&gt;.qtechqms.com/api/v1/ops/call
+Authorization: Basic &lt;credential&gt;
+Content-Type: application/json
+
+{
+  "eventId":     "b3f1c2e0-9a44-5c81-b0f2-7d1e4a2c9f30",
+  "ticketID":    "4c9a1e77-2b6d-4f80-9e13-8a5c2f0b7d64",
+  "branchUUID":  "c761bfe7-...",
+  "counterName": "7",
+  "queueNo":     "A045",
+  "timestamp":   "2026-08-20T01:14:22.000Z"
+}</code></pre>
+
+      <p><code>silent: true</code> is added in one situation only, described in &sect;5.</p>
+
+      <h3>Where each value comes from</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>Field</th><th>Source</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>ticketID</code></td><td>Nexus check-in row id</td><td>A UUID. Opaque, unique per ticket, never reused, and encodes nothing about the person &mdash; as item&nbsp;7.6 requires</td></tr>
+            <tr><td><code>queueNo</code></td><td>The number staff see</td><td>Sent verbatim. Shapes are listed below</td></tr>
+            <tr><td><code>counterName</code></td><td>Counter assignment</td><td>Numeric, <code>"1"</code>&ndash;<code>"10"</code>, so the pre-recorded voice can announce it</td></tr>
+            <tr><td><code>eventId</code></td><td>Derived, not generated</td><td>A UUIDv5 of the ticket plus the call&rsquo;s signature &mdash; see &sect;5</td></tr>
+            <tr><td><code>branchUUID</code></td><td>Configuration</td><td>Issued by Qtech at onboarding</td></tr>
+            <tr><td><code>timestamp</code></td><td>Time of the call</td><td>Normalised to ISO&nbsp;8601. Audit only on Qtech&rsquo;s side</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Queue number shapes</h3>
+      <p>Six series are in use. Qtech displays each verbatim; the series is carried inside the number, so it is not sent separately.</p>
+      <div class="tw">
+        <table>
+          <thead><tr><th>Service</th><th>Shape</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td>Contract verification, Direct Hire, Accreditation</td><td>4 digits</td><td><code>6001</code></td></tr>
+            <tr><td>OWWA</td><td>4 digits</td><td><code>9001</code></td></tr>
+            <tr><td>Agency / FRA</td><td>A + 3 digits</td><td><code>A004</code></td></tr>
+            <tr><td>Walk-in, regular</td><td>W + digits</td><td><code>W601</code></td></tr>
+            <tr><td>Walk-in, OWWA</td><td>W + digits</td><td><code>W901</code></td></tr>
+            <tr><td>Walk-in, agency</td><td>WA + 2 digits</td><td><code>WA01</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout">
+        <p class="callout-label">Needs confirmation from Qtech</p>
+        <p>The integration response demonstrates voice announcement for <code>A045</code> only. Four of the six shapes above use a letter prefix. <strong>Qtech should confirm which prefixes have recorded audio</strong> &mdash; <code>A</code>, <code>W</code> and <code>WA</code> &mdash; and what happens to a number whose prefix has none. The display will still be correct; only the announcement is in question.</p>
+      </div>
+
+      <h3>Personal data</h3>
+      <p>None is sent. The Nexus record behind a call carries the client&rsquo;s name, email address and booking reference; the bridge discards all three at the point of reading and never holds, logs or forwards them. Its log files contain queue numbers, counter numbers and opaque identifiers only.</p>
+    </section>
+
+    <!-- ══ 4 ══ -->
+    <section id="s4">
+      <h2><span class="n">4</span><span>Detecting a call</span></h2>
+
+      <p>This is the part of the design that carries the most weight, and the part most likely to be misjudged by anyone modifying it later.</p>
+
+      <p>Nexus has <strong>two separate code paths</strong> that both result in a number being called, and they update different fields. A naive implementation watching a single field works for months and then silently drops an entire category of call.</p>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Path</th><th>Used by</th><th>Fields it updates</th></tr></thead>
+          <tbody>
+            <tr><td>Current</td><td>Contract verification, Direct Hire, Agency, Accreditation</td><td>Call time and counter. <strong>Never</strong> the call counter or last-called time</td></tr>
+            <tr><td>Legacy</td><td>The OWWA window</td><td>All of them</td></tr>
+            <tr><td>Legacy recall</td><td>The OWWA window</td><td><strong>Only</strong> the call count and last-called time &mdash; the call time never moves</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Watching the call time alone &mdash; the obvious choice &mdash; would be blind to <em>every OWWA recall</em>. The bridge therefore keys on a composite signature across all four fields. Any change while the row is in a called state is a call. This covers a first call, a recall on either path, and a counter takeover, which is a genuine re-announcement at the new counter.</p>
+
+      <p>There is a regression test named for the OWWA recall case specifically, so that a future change which reintroduces the fault fails the build rather than the wall.</p>
+
+      <h3>Two inputs, deliberately overlapping</h3>
+      <p>The bridge subscribes to live change notifications from Supabase, which is fast and push-based. That subscription can fail in a particularly unhelpful way: the connection stays open and simply stops delivering, with no error raised anywhere.</p>
+      <p>A second mechanism re-reads the day&rsquo;s called rows every 15 seconds and compares them against the same record of what has already been sent. It catches anything the live feed dropped. The number of calls it has had to recover is itself the signal that the live feed has quietly died, and is reported in the health row.</p>
+    </section>
+
+    <!-- ══ 5 ══ -->
+    <section id="s5">
+      <h2><span class="n">5</span><span>Delivery behaviour</span></h2>
+
+      <h3>Idempotency, retries and recalls</h3>
+      <p>Qtech suppresses a repeated <code>eventId</code> within a ten-minute window and does not re-announce, which makes a retry safe. That places a requirement on us: a retry must reuse its key, and a deliberate recall must use a fresh one.</p>
+      <p>Rather than generating a key and storing it, the bridge <strong>derives</strong> it from the ticket and the call&rsquo;s signature. Two useful properties follow:</p>
+      <ul>
+        <li>A retry produces the same key by construction &mdash; including a retry that happens after the process has restarted, which a stored key would not survive.</li>
+        <li>A recall changes the signature, so it derives a different key and Qtech re-announces, exactly as intended.</li>
+      </ul>
+
+      <h3>Retry policy</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>Condition</th><th>Action</th></tr></thead>
+          <tbody>
+            <tr><td>Network failure, timeout, HTTP 5xx, HTTP 429</td><td>Retry &mdash; 3 attempts, gaps of 1s then 2s</td></tr>
+            <tr><td><code>BRANCH_NOT_FOUND</code>, <code>COUNTER_UNKNOWN</code>, <code>VALIDATION_ERROR</code></td><td>No retry &mdash; the outcome will not change</td></tr>
+            <tr><td>HTTP 401 or 403</td><td>No retry &mdash; recorded as an authentication failure</td></tr>
+            <tr><td>Client timeout</td><td>10 seconds</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>After the final retry the bridge stops and records the failure. Stopping is safe by Qtech&rsquo;s own design: the next call to that counter supersedes the lost one, and there is no catch-up feed to reconcile against. What must not happen is the failure passing unnoticed &mdash; which is what &sect;7 addresses.</p>
+
+      <h3>Ordering</h3>
+      <p>Calls to the <em>same</em> counter are sent strictly one at a time, in order. Nexus can genuinely produce two calls at one counter within milliseconds, because calling the next client automatically marks the previous one missed. Without this, the two requests race and the wall can settle on the older number. Different counters are unaffected and proceed in parallel.</p>
+
+      <h3>After a restart</h3>
+      <p>On starting, the bridge records the current state of the queue <em>without sending anything</em>. Without this, a restart at 16:00 would replay every call made since 09:00 and re-announce the lot.</p>
+      <p>It then re-asserts the most recent call at each counter with <code>silent: true</code>, so the wall shows correct current state without chiming. This is the only situation in which <code>silent</code> is used.</p>
+
+      <div class="callout">
+        <p class="callout-label">Needs confirmation from Qtech</p>
+        <p>The <code>silent</code> flag is documented as optional and its purpose is to suppress chime and voice, so this is a supported use of the interface. But the integration response describes no clear or refresh instruction, so restoring display state after a restart is <strong>our interpretation</strong> rather than something Qtech specified. If they would prefer no traffic at startup, it is disabled with one configuration change and no code change.</p>
+      </div>
+
+      <h3>Calls that cannot be sent</h3>
+      <p>Nexus permits a number to be called without assigning a counter. Qtech requires a counter name, so such a call cannot be delivered. Rather than sending an invalid request and collecting a <code>VALIDATION_ERROR</code>, the bridge refuses it locally, records the reason, and reflects it in the health state. The same applies to a counter that is not on the agreed list.</p>
+    </section>
+
+    <!-- ══ 6 ══ -->
+    <section id="s6">
+      <h2><span class="n">6</span><span>Security</span></h2>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Control</th><th>Implementation</th></tr></thead>
+          <tbody>
+            <tr><td>Transport</td><td>HTTPS only. The bridge <strong>refuses to start</strong> if configured with a plain-HTTP endpoint, so a mistyped scheme cannot put the credential on the wire in clear</td></tr>
+            <tr><td>TLS version</td><td>1.2 minimum</td></tr>
+            <tr><td>Certificate validation</td><td>Enabled, and the bridge refuses to start if an environment setting has disabled it</td></tr>
+            <tr><td>Credential storage</td><td>A root-owned file readable only by the service account. Not in source control, not in the code, not in the service definition</td></tr>
+            <tr><td>Credential rotation</td><td>Edit the file and restart. No rebuild, no redeployment. Qtech accepts old and new secrets for seven days, so no precise timing is needed</td></tr>
+            <tr><td>Inbound access</td><td>None. The bridge listens on no port and accepts no connections</td></tr>
+            <tr><td>Process isolation</td><td>Runs as a dedicated account with no shell and no home directory, under a restrictive system sandbox</td></tr>
+            <tr><td>Data minimisation</td><td>Six fields, no personal data, verified by test</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>If Qtech adopt IP allow-listing, the address to register is the office&rsquo;s public address as seen from the Pi. The installation guide includes the command to capture it.</p>
+    </section>
+
+    <!-- ══ 7 ══ -->
+    <section id="s7">
+      <h2><span class="n">7</span><span>Health monitoring</span></h2>
+
+      <p>A queue display fails quietly. If calls stop reaching the wall, nothing on screen changes &mdash; the last numbers simply stay there, looking entirely normal, while clients wait for a number that was called ten minutes ago. Staff have no way to tell from the wall itself.</p>
+
+      <p>The bridge therefore reports its own state continuously. Nexus reads a single value:</p>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>State</th><th>Meaning</th><th>Trigger</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pill ok">OK</span></td><td>Calls are reaching the display</td><td>Everything below is clear</td></tr>
+            <tr><td><span class="pill warn">Degraded</span></td><td>Running, but not delivering reliably</td><td>Live feed disconnected, Qtech health probe failing, or three consecutive failed calls</td></tr>
+            <tr><td><span class="pill crit">Down</span></td><td>Assume nothing is reaching the display</td><td>No heartbeat for 90 seconds</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>What each failure looks like</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>Failure</th><th>How it surfaces</th></tr></thead>
+          <tbody>
+            <tr><td>Pi powered off, process dead, SD card failed</td><td>The heartbeat stops advancing &rarr; <span class="pill crit">Down</span> after 90 seconds</td></tr>
+            <tr><td>Live feed silently stops delivering</td><td>Marked disconnected, or the recovery counter climbing while it still claims to be connected</td></tr>
+            <tr><td>Qtech unreachable, or credential rejected</td><td>Failure streak with an authentication error code</td></tr>
+            <tr><td>Qtech answers HTTP 200 with an error in the body</td><td>The specific code is recorded. This is the quietest failure of all &mdash; it succeeds at every level except the one that matters</td></tr>
+            <tr><td>Numbers called with no counter assigned</td><td>Counted and reflected in the state, so a systemic process problem cannot hide</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>The heartbeat is the load-bearing part. Every other failure produces a log line somewhere. A dead Pi produces nothing at all &mdash; the only detectable signal is a value that should be changing and has stopped. So it is written unconditionally on a timer, not only when something happens.</p>
+
+      <p>A separate append-only log records the outcome of every call attempt, which provides the daily call-volume and error-rate review that Qtech&rsquo;s pilot phase requires.</p>
+
+      <div class="callout gap">
+        <p class="callout-label">The outstanding gap</p>
+        <p>All of the above is detection and recording. Qtech item&nbsp;7.9 asks for an <strong>operator-visible alert</strong> &mdash; something that tells counter staff, at the counter, that the display may be stale. The data is available for Nexus to read; the screen element that displays it has not been built. Until it is, a failure is visible to whoever looks at the database, not to the person at the window. This is a Nexus change and should be closed before Phase&nbsp;5.</p>
+      </div>
+    </section>
+
+    <!-- ══ 8 ══ -->
+    <section id="s8">
+      <h2><span class="n">8</span><span>Deployment</span></h2>
+
+      <p>The full step-by-step procedure is <code>docs/INSTALL.md</code> in the repository, covering a blank Pi through to a running bridge, with a troubleshooting table. Summary:</p>
+
+      <ol class="body">
+        <li><strong>Apply the database schema</strong> &mdash; one SQL file, once per environment.</li>
+        <li><strong>Prepare the Pi</strong> &mdash; Raspberry Pi OS Lite, Singapore time zone, Node&nbsp;20 or newer. No desktop or browser is needed.</li>
+        <li><strong>Clone and install</strong> &mdash; one script, which creates the service account, builds, deploys and registers the service.</li>
+        <li><strong>Configure</strong> &mdash; six values: two for Supabase, four from Qtech.</li>
+        <li><strong>Dry run</strong> &mdash; a mode that does everything except the outbound call, proving the Nexus half works before a display is involved.</li>
+        <li><strong>Go live and confirm it survives a reboot</strong> &mdash; the failure that stays invisible until the day the power blinks.</li>
+      </ol>
+
+      <p>Expect around 30 minutes, most of it waiting for downloads. The service restarts automatically on crash and starts on boot. Updating is a pull, a re-run of the installer, and a restart; the credential file is left untouched.</p>
+    </section>
+
+    <!-- ══ 9 ══ -->
+    <section id="s9">
+      <h2><span class="n">9</span><span>Acceptance testing</span></h2>
+
+      <p>Qtech&rsquo;s procedure requires calls <em>driven from the MWO&ndash;OWWA system</em>. Driving them through the live queue would mean calling real clients to real counters, so the bridge ships with a command-line tool that sends a single call using the same credentials and the same payload builder, prints the raw request and response for schema checking, and performs no retry.</p>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Phase</th><th>Readiness</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td>0 &mdash; Environment</td><td><span class="pill mute">Blocked</span></td><td>Awaiting the test branch identifier, credentials and counter list from Qtech</td></tr>
+            <tr><td>1 &mdash; Interface conformance</td><td><span class="pill ok">Ready</span></td><td>Happy path, all three error codes, 401, 429, 5xx and duplicate handling are already covered by automated tests; the tool exercises them live</td></tr>
+            <tr><td>2 &mdash; Display verification</td><td><span class="pill ok">Ready</span></td><td>Idle-counter call, replacing call, concurrent calls and repeat announcement all have prepared commands</td></tr>
+            <tr><td>3 &mdash; Failure injection</td><td><span class="pill ok">Ready</span></td><td>Duplicate replay, link severed, link restored and unauthenticated request all have prepared procedures</td></tr>
+            <tr><td>4 &mdash; Pilot</td><td><span class="pill ok">Ready</span></td><td>The call log supplies the daily volume and error-rate review</td></tr>
+            <tr><td>5 &mdash; Acceptance</td><td><span class="pill warn">One gap</span></td><td>Item&nbsp;7.9 &mdash; the operator-visible alert &mdash; is outstanding</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Worth demonstrating during Phase&nbsp;3: stopping the bridge causes the reported state to go <span class="pill crit">Down</span> within 90 seconds. That is the silent-failure detection working, and it is the mechanism that will tell staff the wall has stopped updating.</p>
+
+      <h3>Automated coverage</h3>
+      <p>52 automated tests plus an end-to-end start-up test that drives the whole pipeline against stub servers. The delivery tests assert the behaviours the integration response makes mandatory: retry only on transient faults, never on business errors, one idempotency key across the retries of a single call, per-counter ordering, and the exact payload key set.</p>
+    </section>
+
+    <!-- ══ 10 ══ -->
+    <section id="s10">
+      <h2><span class="n">10</span><span>Conformance</span></h2>
+
+      <p>Against the eleven changes the integration response requires of the MWO&ndash;OWWA system. A clause-by-clause mapping including &sect;&sect;1&ndash;6 is in <code>docs/QTECH-CONFORMANCE.md</code>.</p>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Item</th><th>Requirement</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td>Outbound HTTPS client, TLS 1.2+, certificate validation</td><td><span class="pill ok">Met</span></td></tr>
+            <tr><td class="num">2</td><td>Credential in a secret store, replaceable without a code change</td><td><span class="pill ok">Met</span></td></tr>
+            <tr><td class="num">3</td><td>Send a call whenever a number is called; recall uses a new event id</td><td><span class="pill ok">Met</span></td></tr>
+            <tr><td class="num">4</td><td>Counter names from the agreed list; notify before adding</td><td><span class="pill ok">Met</span></td></tr>
+            <tr><td class="num">5</td><td>One idempotency key per call, reused across retries</td><td><span class="pill ok">Met</span></td></tr>
+            <tr><td class="num">6</td><td>Ticket id opaque, unique for the day, never reused</td><td><span class="pill ok">Met</span></td></tr>
+            <tr><td class="num">7</td><td>Retry and backoff, including the no-retry rule</td><td><span class="pill ok">Met</span></td></tr>
+            <tr><td class="num">8</td><td>Per-counter serialisation</td><td><span class="pill ok">Met</span></td></tr>
+            <tr><td class="num">9</td><td>Error logging <em>and an operator-visible alert</em></td><td><span class="pill warn">Partial</span></td></tr>
+            <tr><td class="num">10</td><td>Egress IP disclosure</td><td><span class="pill info">On deploy</span></td></tr>
+            <tr><td class="num">11</td><td>Firewall rule for outbound 443</td><td><span class="pill info">On deploy</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ══ 11 ══ -->
+    <section id="s11">
+      <h2><span class="n">11</span><span>Open questions</span></h2>
+
+      <h3>For Qtech</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>#</th><th>Question</th><th>Why it matters</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td>Which queue number prefixes have recorded audio &mdash; <code>A</code>, <code>W</code>, <code>WA</code>?</td><td>Four of our six series use a letter prefix; only <code>A045</code> is demonstrated</td></tr>
+            <tr><td class="num">2</td><td>Exact counter name strings &mdash; <code>"7"</code> or <code>"Counter 7"</code>?</td><td>Both are announceable. We need the agreed list to match exactly</td></tr>
+            <tr><td class="num">3</td><td>&ldquo;Backoff 1s / 2s / 4s, maximum 3 attempts&rdquo; &mdash; three attempts in total, or three retries after the first?</td><td>We took the literal, more conservative reading: three attempts, gaps of 1s and 2s</td></tr>
+            <tr><td class="num">4</td><td>Does <code>GET /health</code> need the branch identified?</td><td>Described as a &ldquo;liveness and branch resolution check&rdquo;; we currently send a bare authenticated request</td></tr>
+            <tr><td class="num">5</td><td>Is a silent call at start-up an acceptable way to restore display state?</td><td>There is no clear or refresh instruction, so this is our interpretation</td></tr>
+            <tr><td class="num">6</td><td>What rate limits sit behind the documented 429?</td><td>So our retry policy does not compound a throttle</td></tr>
+            <tr><td class="num">7</td><td>Test branch identifier, credentials and counter list</td><td>Phase 0 deliverable &mdash; nothing can be configured without them</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>For MWO</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th>#</th><th>Decision</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td>Confirm that a number remaining on the wall after close of business is operationally acceptable (&sect;1)</td></tr>
+            <tr><td class="num">2</td><td>Decide where the health indicator appears in Nexus, and schedule that work &mdash; this is the item&nbsp;7.9 gap</td></tr>
+            <tr><td class="num">3</td><td>Nominate the counter for the five-day pilot</td></tr>
+            <tr><td class="num">4</td><td>Confirm whether a fixed public address is available, if Qtech adopt allow-listing</td></tr>
+            <tr><td class="num">5</td><td>Store the production credentials somewhere durable &mdash; otherwise the Pi holds the only copy</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ══ 12 ══ -->
+    <section id="s12">
+      <h2><span class="n">12</span><span>Responsibilities</span></h2>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Area</th><th>Owner</th></tr></thead>
+          <tbody>
+            <tr><td>Display hardware, layout, chime and voice</td><td>Qtech</td></tr>
+            <tr><td>Branch configuration and counter audio</td><td>Qtech</td></tr>
+            <tr><td>Endpoint availability and credential rotation</td><td>Qtech</td></tr>
+            <tr><td>The Pi, its network and its power</td><td>MWO</td></tr>
+            <tr><td>Bridge software and its configuration</td><td>MWO</td></tr>
+            <tr><td>Calling numbers, and assigning counters when doing so</td><td>MWO counter staff</td></tr>
+            <tr><td>Acting on a degraded or down health state</td><td>MWO</td></tr>
+            <tr><td>Notifying Qtech before a new counter is introduced</td><td>MWO</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>The boundary is the HTTPS request. MWO is responsible for a correct, timely call arriving at the endpoint; Qtech is responsible for everything that happens to it afterwards.</p>
+    </section>
+
+    <!-- ══ A ══ -->
+    <section id="a1">
+      <h2><span class="n">A</span><span>Configuration reference</span></h2>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Setting</th><th>Default</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><code>QTECH_BASE_URL</code></td><td>&mdash;</td><td>Must be HTTPS and end in <code>/api/v1/ops</code></td></tr>
+            <tr><td><code>QTECH_USERNAME</code> / <code>QTECH_PASSWORD</code></td><td>&mdash;</td><td>Basic authentication credential</td></tr>
+            <tr><td><code>QTECH_BRANCH_UUID</code></td><td>&mdash;</td><td>Issued by Qtech at onboarding</td></tr>
+            <tr><td><code>SUPABASE_URL</code> / <code>SUPABASE_KEY</code></td><td>&mdash;</td><td>Where queue state is read and health is written</td></tr>
+            <tr><td><code>QTECH_ALLOWED_COUNTERS</code></td><td class="num">1&ndash;10</td><td>The agreed counter list</td></tr>
+            <tr><td><code>QTECH_COUNTER_NAME_FORMAT</code></td><td><code>number</code></td><td><code>"7"</code>, or <code>prefixed</code> for <code>"Counter 7"</code></td></tr>
+            <tr><td><code>QTECH_TIMEOUT_MS</code></td><td class="num">10 000</td><td>Client timeout, as recommended</td></tr>
+            <tr><td><code>RECONCILE_INTERVAL_MS</code></td><td class="num">15 000</td><td>Safety-net re-read of the day&rsquo;s calls</td></tr>
+            <tr><td><code>HEARTBEAT_INTERVAL_MS</code></td><td class="num">15 000</td><td>Health write cadence; six missed beats is a down state</td></tr>
+            <tr><td><code>QTECH_HEALTH_INTERVAL_MS</code></td><td class="num">120 000</td><td>Liveness probe cadence</td></tr>
+            <tr><td><code>RESYNC_ON_START</code></td><td><code>true</code></td><td>Silent restore of display state after a restart</td></tr>
+            <tr><td><code>DRY_RUN</code></td><td><code>false</code></td><td>Everything except the outbound call</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ══ B ══ -->
+    <section id="a2">
+      <h2><span class="n">B</span><span>Outcome codes</span></h2>
+
+      <p>Every call attempt is recorded with one of these outcomes.</p>
+      <div class="tw">
+        <table>
+          <thead><tr><th>Outcome</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>SENT</code></td><td>Accepted and announced</td></tr>
+            <tr><td><code>DUPLICATE</code></td><td>Qtech recognised a repeated event id and suppressed the announcement. Counts as delivered</td></tr>
+            <tr><td><code>FAILED</code></td><td>Rejected, or abandoned after the final retry</td></tr>
+            <tr><td><code>BLOCKED</code></td><td>Never sent, because it could not be valid &mdash; see below</td></tr>
+            <tr><td><code>DRY_RUN</code></td><td>Suppressed by configuration during rehearsal</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Block reason</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>COUNTER_MISSING</code></td><td>Called without a counter assigned in Nexus</td></tr>
+            <tr><td><code>COUNTER_NOT_ALLOWED</code></td><td>Counter is not on the agreed Qtech list</td></tr>
+            <tr><td><code>QUEUE_NO_MISSING</code></td><td>The record carries no queue number &mdash; should not occur</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ══ C ══ -->
+    <section id="a3">
+      <h2><span class="n">C</span><span>Where things live</span></h2>
+
+      <p>Repository <code>mwosginfo/nexus-kiosk</code>, branch <code>claude/nexus-rpi-bridge-setup-kof9gw</code>, directory <code>display/</code>.</p>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Path</th><th>Contents</th></tr></thead>
+          <tbody>
+            <tr><td><code>README.md</code></td><td>Technical overview and operating notes</td></tr>
+            <tr><td><code>docs/INSTALL.md</code></td><td>Step-by-step installation and troubleshooting</td></tr>
+            <tr><td><code>docs/QTECH-CONFORMANCE.md</code></td><td>Clause-by-clause conformance record</td></tr>
+            <tr><td><code>docs/handover.html</code></td><td>This document</td></tr>
+            <tr><td><code>sql/001_qtech_bridge.sql</code></td><td>Health and call-log schema</td></tr>
+            <tr><td><code>src/domain/</code></td><td>Call detection, event id derivation, number and counter formatting</td></tr>
+            <tr><td><code>src/qtech/</code></td><td>HTTP client and the Qtech wire schemas</td></tr>
+            <tr><td><code>src/supabase/</code></td><td>Change watcher and health reporting</td></tr>
+            <tr><td><code>src/dispatch/</code></td><td>Retry policy and per-counter ordering</td></tr>
+            <tr><td><code>src/cli/send-call.ts</code></td><td>Conformance tool for acceptance testing</td></tr>
+            <tr><td><code>test/</code></td><td>52 tests plus the end-to-end start-up test</td></tr>
+            <tr><td><code>install.sh</code>, <code>systemd/</code></td><td>Installer and service definition</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <footer>
+    <span>MWO&ndash;OWWA Singapore &middot; Project Nexus</span>
+    <span>Prepared for Qtech Phase 0 onboarding</span>
+    <span>Against the Qtech integration response of 5 August 2026</span>
+  </footer>
+
+</div>
