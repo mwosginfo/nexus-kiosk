@@ -3,7 +3,9 @@ import { createLogger, safeError } from './logger.js';
 import { createSupabaseClient } from './supabase/client.js';
 import { CallWatcher, type CandidateSource } from './supabase/watcher.js';
 import { HealthWriter } from './supabase/health-writer.js';
-import { QtechClient } from './qtech/client.js';
+import { QtechHttpTransport } from './qtech/client.js';
+import { QtechTcpTransport } from './qtech/tcp-transport.js';
+import type { CallTransport } from './qtech/transport.js';
 import { Dispatcher } from './dispatch/dispatcher.js';
 import type { CallCandidate } from './types.js';
 
@@ -42,6 +44,11 @@ async function main(): Promise<void> {
     version: VERSION,
     bridgeId: config.bridgeId,
     dryRun: config.dryRun,
+    transport: config.qtechTransport,
+    endpoint:
+      config.qtechTransport === 'tcp'
+        ? `${config.qtechTcpHost}:${config.qtechTcpPort} (${config.qtechTcpFraming})`
+        : config.qtechBaseUrl,
     counterNameFormat: config.counterNameFormat,
     allowedCounters: config.allowedCounters.join(','),
     resyncOnStart: config.resyncOnStart,
@@ -49,7 +56,10 @@ async function main(): Promise<void> {
 
   const supabase = createSupabaseClient(config);
   const health = new HealthWriter(supabase, config, logger, VERSION);
-  const qtech = new QtechClient(config, logger);
+  const qtech: CallTransport =
+    config.qtechTransport === 'tcp'
+      ? new QtechTcpTransport(config, logger)
+      : new QtechHttpTransport(config, logger);
   const dispatcher = new Dispatcher(qtech, health, logger, controller.signal);
 
   const onCandidate = (candidate: CallCandidate, source: CandidateSource): void => {

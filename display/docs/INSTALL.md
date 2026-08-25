@@ -10,16 +10,18 @@ Roughly 30 minutes, most of it waiting for `apt` and `npm`.
 
 ### What you need from Qtech
 
-The bridge cannot be configured without these. Ask for them up front — items
-1–4 are the Phase 0 deliverable in their acceptance procedure (§8).
+The bridge cannot be configured without these.
 
 | # | Item | Example |
 |---|---|---|
-| 1 | Tenant URL | `https://mwo.qtechqms.com` |
-| 2 | `branchUUID` for the **test** branch | `c761bfe7-…` |
-| 3 | Basic auth username + secret for the test branch | — |
-| 4 | The counter names configured on the test branch | `1`–`10` |
-| 5 | Later: the same four for the **production** branch | — |
+| 1 | Host and port of the Qtech equipment on the PE network | `192.168.20.15:9100` |
+| 2 | How a message is framed on the stream | newline / length-prefix / raw |
+| 3 | `branchUUID` for the **test** endpoint | `c761bfe7-…` |
+| 4 | The counter names configured on it | `1`–`10` |
+| 5 | Later: the same for **production** | — |
+
+No credentials: the TCP protocol carries no authentication. See
+`QTECH-TCP-QUESTIONS.md` for what is still outstanding.
 
 ### What Qtech needs from you
 
@@ -126,18 +128,26 @@ The six that must be set:
 
 ```ini
 SUPABASE_URL=https://<project>.supabase.co
-SUPABASE_KEY=<service-role-or-equivalent-secret-key>
+SUPABASE_KEY=<secret key bound to the qtech_bridge role>
 
-QTECH_BASE_URL=https://<tenant>.qtechqms.com/api/v1/ops
-QTECH_USERNAME=<from Qtech>
-QTECH_PASSWORD=<from Qtech>
+QTECH_TRANSPORT=tcp
+QTECH_TCP_HOST=<qtech host on the PE network>
+QTECH_TCP_PORT=9100
+QTECH_TCP_FRAMING=newline
 QTECH_BRANCH_UUID=<from Qtech>
 ```
 
-`QTECH_BASE_URL` **must** be `https://` and **must** include `/api/v1/ops`
-with no trailing slash. The bridge refuses to start on a plain-HTTP URL —
-Qtech does not offer HTTP, and a mistyped scheme would put the Basic secret on
-the wire in clear.
+`SUPABASE_URL` **must** be `https://`. It is the only leg that crosses the
+internet and the only one carrying a secret, so the bridge refuses to start
+without TLS there.
+
+`QTECH_TCP_HOST` must be a **private address**. The Qtech link is plaintext by
+design, on the grounds that it never leaves the premises; a public address
+means it does, so the bridge refuses that too.
+
+`QTECH_TCP_FRAMING` is not yet confirmed by Qtech. `newline` is the default and
+the most common convention; `length` and `raw` are also implemented, so
+changing it is one line rather than a rebuild.
 
 Everything else has a working default. See `.env.example` for the full list.
 

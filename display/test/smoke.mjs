@@ -7,6 +7,7 @@
  *   npm run build && node test/smoke.mjs
  */
 import { createServer } from 'node:http';
+import { createServer as createTcpServer } from 'node:net';
 import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
 
@@ -63,22 +64,34 @@ function sgtToday() {
   return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
-const qtech = await jsonServer((req, res, body) => {
-  calls.qtech.push(`${req.method} ${req.url}`);
-  if (req.url.endsWith('/call')) {
-    const parsed = JSON.parse(body);
-    calls.callBodies.push({ body: parsed, auth: req.headers.authorization });
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(
-      JSON.stringify({
-        response: 'Success',
-        message: { eventId: parsed.eventId, status: 'ON_CALL', duplicate: false },
-      }),
-    );
-    return;
-  }
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ response: 'Success', message: { status: 'OK' } }));
+// Qtech stub: newline-framed JSON over TCP, matching the live transport.
+const qtech = await new Promise((resolve) => {
+  let connections = 0;
+  const server = createTcpServer((socket) => {
+    connections += 1;
+    calls.qtech.push('tcp-connect');
+    let buf = Buffer.alloc(0);
+    socket.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      let i;
+      while ((i = buf.indexOf(0x0a)) !== -1) {
+        const msg = buf.subarray(0, i).toString('utf8');
+        buf = buf.subarray(i + 1);
+        const parsed = JSON.parse(msg);
+        calls.callBodies.push({ body: parsed });
+        socket.write(
+          JSON.stringify({
+            response: 'Success',
+            message: { eventId: parsed.eventId, status: 'ON_CALL', duplicate: false },
+          }) + '\n',
+        );
+      }
+    });
+    socket.on('error', () => {});
+  });
+  server.listen(0, '127.0.0.1', () =>
+    resolve({ server, port: server.address().port, get connections() { return connections; } }),
+  );
 });
 
 const child = spawn(process.execPath, ['dist/src/index.js'], {
@@ -86,9 +99,10 @@ const child = spawn(process.execPath, ['dist/src/index.js'], {
     ...process.env,
     SUPABASE_URL: `http://127.0.0.1:${supabase.port}`,
     SUPABASE_KEY: 'test-key',
-    QTECH_BASE_URL: `http://127.0.0.1:${qtech.port}/api/v1/ops`,
-    QTECH_USERNAME: 'mwo',
-    QTECH_PASSWORD: 'secret',
+    QTECH_TRANSPORT: 'tcp',
+    QTECH_TCP_HOST: '127.0.0.1',
+    QTECH_TCP_PORT: String(qtech.port),
+    QTECH_TCP_FRAMING: 'newline',
     QTECH_BRANCH_UUID: 'branch-1',
     HEARTBEAT_INTERVAL_MS: '5000',
     RECONCILE_INTERVAL_MS: '2000',
@@ -122,7 +136,7 @@ assert.ok(messages.includes('bridge running'), 'should reach running state');
 assert.ok(messages.includes('shutdown complete'), 'should shut down cleanly');
 assert.equal(code, 0, 'should exit 0 on SIGTERM');
 
-assert.ok(calls.qtech.some((c) => c === 'GET /api/v1/ops/health'), 'should probe qtech /health');
+assert.ok(calls.qtech.includes('tcp-connect'), 'should reach the Qtech endpoint over TCP');
 assert.ok(calls.health.length > 0, 'should write a heartbeat row');
 // Boot seed reads a wider status set (so the resync cannot re-assert a stale
 // call at a counter whose newest ticket has already moved on); the reconcile
@@ -151,7 +165,6 @@ assert.equal(delivered.body.ticketID, CALLED_ROW.id, 'ticketID is the opaque kio
 assert.equal(delivered.body.queueNo, 'A045');
 assert.equal(delivered.body.counterName, '7');
 assert.equal(delivered.body.branchUUID, 'branch-1');
-assert.equal(delivered.auth, `Basic ${Buffer.from('mwo:secret').toString('base64')}`);
 assert.match(delivered.body.eventId, /^[0-9a-f-]{36}$/);
 
 const beat = calls.health.at(-1);

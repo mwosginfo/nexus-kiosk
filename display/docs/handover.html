@@ -424,7 +424,7 @@ footer {
     <!-- ══ At a glance ══ -->
     <section id="glance">
       <dl class="summary">
-        <div><dt>Endpoints used</dt><dd>POST /call<br>GET /health</dd></div>
+        <div><dt>Transport</dt><dd>JSON over TCP<br>PE network, local</dd></div>
         <div><dt>Fields per call</dt><dd>6 required<br>1 optional</dd></div>
         <div><dt>Personal data</dt><dd>None</dd></div>
         <div><dt>Inbound ports</dt><dd>None</dd></div>
@@ -553,11 +553,9 @@ footer {
     <section id="s3">
       <h2><span class="n">3</span><span>What is sent</span></h2>
 
-      <p>Every call is a single JSON POST. This is the complete payload &mdash; there are no other fields, and the delivery tests assert that the key set is exactly this:</p>
+      <p>Every call is a single JSON message, sent over TCP to the Qtech equipment on the PE network. This is the complete payload &mdash; there are no other fields, and the delivery tests assert that the key set is exactly this:</p>
 
-<pre><code>POST https://&lt;tenant&gt;.qtechqms.com/api/v1/ops/call
-Authorization: Basic &lt;credential&gt;
-Content-Type: application/json
+<pre><code>connect  &lt;qtech-host&gt;:&lt;port&gt;   (PE network, plaintext, no auth)
 
 {
   "eventId":     "b3f1c2e0-9a44-5c81-b0f2-7d1e4a2c9f30",
@@ -568,7 +566,9 @@ Content-Type: application/json
   "timestamp":   "2026-08-20T01:14:22.000Z"
 }</code></pre>
 
-      <p><code>silent: true</code> is added in one situation only, described in &sect;5.</p>
+      <p><code>silent: true</code> is added in one situation only, described in &sect;5. The reply is the same envelope the HTTPS interface returned, so nothing downstream of the transport changed when the carrier did.</p>
+
+      <p>One detail is still to be confirmed with Qtech: how a message is delimited on the stream. TCP carries no message boundaries, so both ends must agree. The three plausible conventions are all implemented and selected by configuration, so confirming it is a one-line change rather than new work.</p>
 
       <h3>Where each value comes from</h3>
       <div class="tw">
@@ -688,11 +688,11 @@ Content-Type: application/json
         <table>
           <thead><tr><th>Control</th><th>Implementation</th></tr></thead>
           <tbody>
-            <tr><td>Transport</td><td>HTTPS only. The bridge <strong>refuses to start</strong> if configured with a plain-HTTP endpoint, so a mistyped scheme cannot put the credential on the wire in clear</td></tr>
-            <tr><td>TLS version</td><td>1.2 minimum</td></tr>
+            <tr><td>Qtech link</td><td>Plaintext TCP with no authentication, on the PE network. Accepted <strong>only to a private address</strong> &mdash; a public host is refused at startup, because the reason for dropping TLS is that the traffic stays on the premises</td></tr>
+            <tr><td>Supabase link</td><td>HTTPS enforced; the bridge refuses to start without it. This is the only leg that crosses the internet and the only one carrying a secret, so it is the whole security boundary</td></tr>
             <tr><td>Certificate validation</td><td>Enabled, and the bridge refuses to start if an environment setting has disabled it</td></tr>
-            <tr><td>Credential storage</td><td>A root-owned file readable only by the service account. Not in source control, not in the code, not in the service definition</td></tr>
-            <tr><td>Credential rotation</td><td>Edit the file and restart. No rebuild, no redeployment. Qtech accepts old and new secrets for seven days, so no precise timing is needed</td></tr>
+            <tr><td>Key storage</td><td>A root-owned file readable only by the service account. Not in source control, not in the code, not in the service definition</td></tr>
+            <tr><td>Key scope</td><td>The bridge reads ten columns of one table and writes its own two. A least-privilege database role is provided so it cannot reach client records</td></tr>
             <tr><td>Inbound access</td><td>None. The bridge listens on no port and accepts no connections</td></tr>
             <tr><td>Process isolation</td><td>Runs as a dedicated account with no shell and no home directory, under a restrictive system sandbox</td></tr>
             <tr><td>Data minimisation</td><td>Six fields, no personal data, verified by test</td></tr>
@@ -700,7 +700,7 @@ Content-Type: application/json
         </table>
       </div>
 
-      <p>If Qtech adopt IP allow-listing, the address to register is the office&rsquo;s public address as seen from the Pi. The installation guide includes the command to capture it.</p>
+      <p>The Qtech link being plaintext is acceptable because it never leaves the PE network. It does mean anything already on that network could send a call to the display, which is worth knowing but is bounded: the display shows queue numbers, and the bridge holds nothing that would let an attacker reach further. The credential worth protecting is the Supabase key, which is why that leg is treated differently.</p>
     </section>
 
     <!-- ══ 7 ══ -->

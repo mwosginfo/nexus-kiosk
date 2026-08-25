@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { isSecureOrPrivate, isTlsOrLoopback } from './net-address.js';
+import { TcpFramingSchema } from './qtech/framing.js';
+import { isPrivateHost } from './net-address.js';
 
 /**
  * Configuration for the bridge, parsed from the environment exactly once at
@@ -57,6 +59,24 @@ export const ConfigSchema = z.object({
 
   // ── Qtech ───────────────────────────────────────────────────────────────
   /**
+   * Which carrier to use. Qtech confirmed on 2026-08-20 that the JSON is
+   * unchanged and only the transport differs, so both are kept: `tcp` is the
+   * live path, `http` remains for the existing test suite and as a fallback
+   * if the change is deferred.
+   */
+  qtechTransport: z.enum(['tcp', 'http']).default('tcp'),
+
+  /** Qtech equipment on the PE network. */
+  qtechTcpHost: z.string().min(1).default('127.0.0.1'),
+  qtechTcpPort: z.coerce.number().int().min(1).max(65_535).default(9100),
+  /**
+   * How one JSON message is delimited on the stream. Not yet specified by
+   * Qtech; all plausible conventions are implemented so confirming it is a
+   * configuration change rather than a code change. See qtech/framing.ts.
+   */
+  qtechTcpFraming: TcpFramingSchema.default('newline'),
+
+  /**
    * The Qtech endpoint. On-premises as of 2026-08-20, so plaintext is expected
    * here and TLS is not offered.
    *
@@ -65,9 +85,11 @@ export const ConfigSchema = z.object({
    * is a public host then it does leave the building and the justification
    * does not survive with it, so the bridge refuses to start.
    */
+  /** Only used when qtechTransport is 'http'. */
   qtechBaseUrl: z
     .string()
     .url()
+    .default('http://127.0.0.1:9100')
     .refine(isSecureOrPrivate, {
       message:
         'plaintext is only allowed to a private address — a public host must use TLS',
@@ -117,6 +139,19 @@ export const ConfigSchema = z.object({
   dryRun: boolish.default(false),
 
   logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+}).superRefine((cfg, ctx) => {
+  // The TCP link carries no TLS and no credential. Qtech's justification is
+  // that it never leaves the premises, so the same rule as the URL applies:
+  // plaintext is permitted to a private address and refused to a public one.
+  if (cfg.qtechTransport === 'tcp' && !isPrivateHost(cfg.qtechTcpHost)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['qtechTcpHost'],
+      message:
+        'the TCP link is plaintext, so it is only allowed to a private address — ' +
+        'a public host would put the traffic on networks we do not control',
+    });
+  }
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -126,6 +161,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     bridgeId: env.BRIDGE_ID,
     supabaseUrl: env.SUPABASE_URL,
     supabaseKey: env.SUPABASE_KEY,
+    qtechTransport: env.QTECH_TRANSPORT,
+    qtechTcpHost: env.QTECH_TCP_HOST,
+    qtechTcpPort: env.QTECH_TCP_PORT,
+    qtechTcpFraming: env.QTECH_TCP_FRAMING,
     qtechBaseUrl: env.QTECH_BASE_URL,
     qtechUsername: env.QTECH_USERNAME,
     qtechPassword: env.QTECH_PASSWORD,

@@ -14,11 +14,12 @@ never to Nexus, in either direction. Nexus already writes call state into
 Supabase for its own queue; the bridge reads that, and writes its own health
 back to Supabase for Nexus to read.
 
-> **Transport change pending.** Qtech advised on 2026-08-20 that the interface
-> will move from HTTPS REST to TCP, with the workflow unchanged. The transport
-> interface is extracted (`src/qtech/transport.ts`) so the swap is contained,
-> but the protocol is not yet specified — see `docs/QTECH-TCP-QUESTIONS.md`.
-> Everything below describes the HTTPS transport currently implemented.
+> **Transport: TCP.** As of 2026-08-20 the Qtech endpoint is on the PE network
+> and takes the same JSON over TCP rather than HTTPS. `QTECH_TRANSPORT=tcp` is
+> the default; the HTTPS transport is retained as a fallback. One thing is
+> still unconfirmed — how a message is framed on the stream — so all three
+> plausible conventions are implemented and `QTECH_TCP_FRAMING` selects one.
+> See `docs/QTECH-TCP-QUESTIONS.md`.
 
 ## Scope
 
@@ -171,7 +172,10 @@ See `.env.example` for the full annotated list. The ones that matter:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `QTECH_BASE_URL` | — | `https://<tenant>.qtechqms.com/api/v1/ops`, no trailing slash |
+| `QTECH_TRANSPORT` | `tcp` | `tcp` (live) or `http` (fallback) |
+| `QTECH_TCP_HOST` / `QTECH_TCP_PORT` | — | Qtech equipment on the PE network. Plaintext is accepted only to a private address |
+| `QTECH_TCP_FRAMING` | `newline` | `newline`, `length` or `raw` — see `src/qtech/framing.ts` |
+| `QTECH_BASE_URL` | — | HTTP fallback only |
 | `QTECH_BRANCH_UUID` | — | Issued at onboarding |
 | `QTECH_COUNTER_NAME_FORMAT` | `number` | `number` → `"7"`; `prefixed` → `"Counter 7"`. Both are voice-announceable |
 | `QTECH_ALLOWED_COUNTERS` | `1..10` | The list agreed at setup. Nexus caps counter assignment at 1–10. **Notify Qtech before adding one** |

@@ -1,172 +1,85 @@
-# TCP transport — specification request
+# TCP transport — outstanding questions
 
-Qtech advised (2026-08-20) that the queue interface will use TCP rather than
-HTTP, with the workflow unchanged.
+**Updated 2026-08-20** after Qtech confirmed the JSON is unchanged and only the
+carrier differs: same request object, over TCP instead of HTTPS, to equipment
+on the same network as the bridge, with no TLS and no authentication.
 
-We agree the workflow is unchanged: one call event whenever a number is called
-to a counter, no other events. Everything above the transport in our bridge —
-call detection, event id derivation, per-counter ordering, health reporting —
-is unaffected and needs no change.
-
-What we cannot do is implement the transport, because "TCP instead of HTTP" is
-not by itself a protocol. HTTP already runs over TCP; the change is from a
-specified request/response protocol to something else, and the 5 August
-integration response defines the interface entirely in HTTP terms. Sections 1,
-3, 4 and 6 of that document, and the Phase 1 exit criteria in §8 ("every
-response matches the published schema and error codes"), no longer have a
-subject.
-
-The questions below are ordered by how much each one changes on our side.
-Question 1 is the one that matters most.
+That answered most of what we had asked. The TCP transport is built and tested
+against a real socket; the list below is what remains.
 
 ---
 
-## 1. Does the protocol acknowledge each call?
+## What we took as settled
 
-**Why it matters more than anything else here.** The integration response §1
-states: *"Synchronous — the HTTP response carries the outcome of the call."*
-Three features we built are downstream of that single sentence:
+Because the JSON is unchanged, we have assumed the response envelope is too —
+`{"response":"Success","message":{…}}` on success and `{"response":"Error"}`
+with the stable codes on failure. That single assumption keeps everything we
+built working: the §4 retry rule that separates transient faults from business
+errors, duplicate reporting, and knowing whether a call actually landed.
 
-- **Retry.** §4 says retry on transient faults and never on a business error.
-  Without an acknowledgement we cannot tell the two apart, so we cannot
-  implement that rule. We would be retrying blind or not at all.
-- **Duplicate handling.** §4 says a repeated `eventId` returns
-  `"duplicate": true` and is not re-announced. With no response we never learn
-  this, and cannot report it.
-- **Knowing a call landed.** Our health reporting tells MWO counter staff
-  whether the display is being fed. Without acknowledgement, "sent" degrades
-  to "written to a socket", which is not the same claim — see question 6.
+**If the TCP interface does not reply at all, tell us before anything else** —
+all three of those stop working and we would need to talk.
 
-Please confirm one of:
+---
 
-- **(a)** Each call receives a response frame carrying an outcome, as the HTTP
-  interface did. *Preferred — everything specified in the 5 August document
-  continues to hold and our change is confined to framing.*
-- **(b)** Calls are acknowledged, but only as accepted/rejected with no
-  detail.
-- **(c)** Fire-and-forget, no acknowledgement.
+## 1. Framing — the one thing that blocks us
 
-If **(c)**, we would like to discuss it before proceeding. It removes the
-delivery guarantees your own document specifies, and it means neither party
-can tell a working link from a broken one until somebody looks at the wall.
+TCP is a byte stream with no message boundaries, so "JSON over TCP" is not yet
+a complete instruction: both ends must agree where one message ends and the
+next begins.
 
-## 2. Framing
+Which of these does the endpoint use?
 
-How is one message delimited on the stream?
+| | Convention |
+|---|---|
+| **a** | JSON followed by a newline (`\n`) |
+| **b** | A 4-byte big-endian length, then that many bytes of JSON |
+| **c** | JSON alone, with the connection close delimiting the reply |
+| **d** | Something else — please describe |
 
-- Newline-delimited JSON, length-prefixed, fixed-width, or something else?
-- If length-prefixed: prefix width, endianness, and whether the length
-  includes the prefix.
-- Character encoding, and maximum message size.
+All three are implemented, so confirming this is a one-line configuration
+change on our side rather than new work. We have defaulted to **(a)**.
 
-## 3. TLS
+## 2. Host and port
 
-Integration response §3: *"HTTPS only, TLS 1.2 or higher. Plain HTTP is not
-offered for this integration."*
+For the test endpoint and, later, for production.
 
-- Is the TCP connection TLS-wrapped?
-- If so, is it TLS on connect (implicit) or negotiated after a plaintext
-  handshake?
-- Certificate details, and whether client certificates are now in scope (§3
-  previously excluded mutual TLS).
+## 3. Connection model
 
-If the answer is plaintext TCP, we would like to raise it formally. Queue
-numbers and counter assignments are not sensitive on their own, but the
-credential is, and a plaintext credential on a shared network is a materially
-weaker position than the one your document describes. Our bridge currently
-refuses to start against a non-TLS endpoint, deliberately.
+We open a connection per call, send, read the reply and close.
 
-## 4. Authentication
+On a local network the handshake costs about a millisecond against a few
+hundred calls a day, and it avoids a failure mode worth avoiding: a long-lived
+TCP connection whose peer has gone away without a proper close stays open,
+accepts writes, and reports no error — so we would be announcing into a dead
+socket while the display quietly stopped updating.
 
-HTTP Basic is an HTTP mechanism and does not carry over.
+Does that suit your endpoint, or do you require a persistent connection? If
+persistent, we will need an application-level ping with an expected reply,
+because without one neither side can detect that situation.
 
-- Is there a login or handshake frame at connection time?
-- Or a credential field on every message?
-- Or is authentication now IP allow-listing alone?
-- What is returned on an authentication failure, and does the server close the
-  connection?
-- Does the 7-day overlap during secret rotation (§3) still apply?
+## 4. Liveness
 
-## 5. Error signalling
+There is no TCP equivalent of `GET /health` in the specification. We currently
+open a connection and close it without sending anything, which tells us whether
+the endpoint is accepting connections. Is that acceptable, or is there a
+proper probe message?
 
-The stable codes in §1 — `BRANCH_NOT_FOUND`, `COUNTER_UNKNOWN`,
-`VALIDATION_ERROR` — were carried in an HTTP response body, and our retry rule
-keys on them.
+## 5. Duplicate window
 
-- Do these codes survive, and in what frame?
-- What is the equivalent of HTTP 5xx and 429 — that is, how do we distinguish
-  "retry this" from "never retry this"?
-- Is there a rate limit, and how is it signalled?
+Does the ten-minute duplicate suppression on `eventId` still apply on TCP? Our
+retry safety depends on it: we derive the event id so that a retry reuses the
+same key and a deliberate recall gets a new one.
 
-## 6. Connection model and liveness
+---
 
-This is where raw TCP is materially harder than HTTP, and where we would like
-your guidance.
+## Also useful, unchanged from before
 
-- One persistent connection, or a connection per call?
-- If persistent: is there a keepalive or ping frame, and at what interval?
-- What replaces `GET /health`?
-- What is the expected behaviour on idle — does the server close an idle
-  connection, and after how long?
-- On reconnect, is any session state re-established, or is each connection
-  independent?
-
-**The half-open problem.** A TCP connection can appear healthy while
-delivering nothing: the peer is gone, no FIN was received, and our writes
-succeed into the local kernel buffer. Under HTTP every call was its own
-request with its own response, so a broken link surfaced on the very next
-call. With a persistent socket and no application-level acknowledgement, we
-can write calls into a dead connection indefinitely with no error raised
-anywhere — while the wall silently stops updating.
-
-We will tune TCP keepalives, but keepalives are slow and coarse. An
-application-level ping with an expected reply is the reliable answer. If the
-protocol has one, please specify it; if not, we would like to discuss adding
-one, because without it neither side can honour your item 7.9 — the
-operator-visible alert telling counter staff the display may be stale.
-
-## 7. Endpoint
-
-- Host and port for the test branch, and for production.
-- Is `branchUUID` still carried per message, or established once per
-  connection?
-- Are the six fields (`eventId`, `ticketID`, `branchUUID`, `counterName`,
-  `queueNo`, `timestamp`) and the optional `silent` unchanged? We assume so,
-  since the workflow is unchanged.
-- Does the 10-minute duplicate window on `eventId` still apply?
-
-## 8. Documentation and acceptance
-
-- A written protocol specification equivalent to §1 of the 5 August document:
-  frame layout, field types, example exchanges, and the error catalogue.
+- Which queue number prefixes have recorded audio? We send `A…`, `W…`, `WA…`
+  and bare four-digit numbers; only `A045` appears in your document.
+- Exact `counterName` strings for the agreed list — `"7"` or `"Counter 7"`.
 - Confirmation of which parts of the 5 August document still stand. Our
-  reading is that §2 (event model), §5 (hosting), §6 (minimum data set) and §7
-  items 2–10 are unaffected, while §1, §3, §4 and the Phase 1 criteria in §8
-  need reissuing.
-- Whether the acceptance phases in §8 are otherwise unchanged.
-
----
-
-## Our side
-
-For planning, once the above is answered:
-
-**Unchanged** — call detection across both Nexus code paths, event id
-derivation, queue number and counter formatting, per-counter serialisation,
-the health and call-log schema, the installer, and the systemd service. These
-are transport-agnostic and were built that way.
-
-**Changes** — the transport implementation and the wire schemas, roughly two
-of fifteen source files, plus configuration (host and port in place of a URL)
-and the conformance CLI. A transport interface is already extracted, so the
-swap is an addition rather than a rewrite.
-
-**Depends on the answers** — if question 1 comes back as fire-and-forget, the
-retry policy, duplicate reporting and a meaningful part of the health
-reporting have to be redesigned, and we would want to agree what "delivered"
-means before building it.
-
-**Estimate** — with answer (a) and a written specification, the transport work
-is small and the existing test suite carries over. With answer (c) the change
-is larger and the guarantees are weaker, and we would want a conversation
-first.
+  reading is that §2, §5, §6 and item 7.2–7.10 are unaffected, §1 needs the
+  framing detail above, §3 is superseded by the on-premises arrangement, §4
+  still applies apart from the HTTP status codes, and Phase 1's "matches the
+  published schema" needs restating for the new carrier.
