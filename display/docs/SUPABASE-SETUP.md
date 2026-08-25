@@ -6,9 +6,9 @@ secret.** It is now the whole of the bridge's security boundary. Worth getting
 right.
 
 ```
-Nexus ──► Supabase ──► bridge ──► Qtech
-          └── internet ──┘   └─ office LAN, plaintext ─┘
-              TLS + key            no TLS, no auth
+Nexus ──────────► Supabase ──────────► bridge ──► Qtech
+  MWO LAN            internet            PE LAN, plaintext
+                  TLS + secret key       no TLS, no auth
 ```
 
 ---
@@ -40,8 +40,10 @@ A service-role key grants far more than that: it bypasses row-level security
 across the entire project, including `appointments`, which holds every
 client's name, email address, contact number and employer.
 
-The bridge reads none of that. On a device sharing a LAN with equipment we now
-speak to in plaintext, it should not be able to.
+The bridge reads none of that. The Pi sits on the PE network alongside vendor
+equipment, on a segment MWO does not exclusively control, and speaks to that
+equipment in plaintext. A device in that position should hold the narrowest
+credential that does the job — not one that can read every client record.
 
 **Recommended:** apply `sql/002_bridge_role.sql`, create a secret API key bound
 to the `qtech_bridge` role, and use that as `SUPABASE_KEY`. If the Pi is lost
@@ -94,9 +96,9 @@ endpoint, that allowance can be removed.
 
 ## 6. When Supabase is unreachable
 
-No calls reach the display, because no calls reach the bridge. This is worth
-being explicit about, since it is now a wholly avoidable dependency between two
-systems in the same building — see the note at the end.
+No calls reach the display, because no calls reach the bridge. Supabase is the
+only path between the MWO network and the PE network, so there is no local
+fallback — see the note at the end.
 
 Behaviour during an outage:
 
@@ -135,24 +137,45 @@ A useful negative test: revoke the key, restart, and confirm the state goes
 
 ## A note on the topology
 
-With Qtech on the premises, a call now travels from Nexus (office LAN) out to
-Supabase in Singapore, back to the Pi (office LAN), and across to the Qtech
-equipment (office LAN). Three of those four points are in the same building.
+Nexus and the bridge are on **separate networks**. Nexus sits on the MWO
+office LAN; the bridge, the Qtech equipment and the display sit on the PE
+network. There is no local path between them, so Supabase is not an incidental
+hop that could be optimised away — it is the only thing connecting the two
+sides, and the design depends on it.
 
-Two consequences worth registering:
+```
+MWO LAN            internet            PE LAN
+Nexus  ──────────► Supabase ─────────► Bridge ──local──► Qtech ──► Display
+(internet)         (Singapore)         (internet)        (internet)  (no internet)
+```
 
-**Latency.** Qtech's Phase 2 exit criterion is that the display updates within
-two seconds of a call. The mirror from Nexus to Supabase alone can take up to
-two seconds before any network time is counted. This should be measured during
-the pilot rather than assumed.
+Two consequences follow, neither of which has a local workaround.
 
-**Availability.** If the office internet drops, the queue display stops
-updating even though Nexus and the Qtech equipment are both healthy and
-reachable from each other over the local switch.
+**Latency has a budget, and most of it is spent before the bridge sees
+anything.** Qtech's Phase 2 criterion is a display update within two seconds of
+a call. Approximate contributions:
 
-Keeping the bridge on Supabase only was a deliberate decision, made when Qtech
-was a cloud service and the round trip was unavoidable. That reasoning does not
-survive the move on-premises unchanged. Nothing needs to happen today, and the
-current design works — but if the pilot shows latency near the two-second
-threshold, or if an internet outage takes the display down during business
-hours, a direct local path from Nexus to the bridge is worth revisiting.
+| Step | Typical | Worst |
+|---|---|---|
+| Nexus writes the call locally | instant | instant |
+| Nexus mirrors it to Supabase (2-second cron) | ~1s | 2s |
+| Supabase receives the write | ~0.1s | ~0.3s |
+| Supabase notifies the bridge | ~0.1s | ~0.3s |
+| Bridge sends to Qtech over the LAN | <0.01s | <0.05s |
+| **Total before Qtech receives it** | **~1.2s** | **~2.6s** |
+
+The dominant term is the Nexus-side mirror, which runs on a two-second cycle.
+The bridge contributes a small fraction and cannot go faster than the data
+reaching it.
+
+Measure this during the pilot rather than assuming it passes. If it fails, the
+place to look is the Nexus mirror cadence — a change in the `nexus` repository,
+not here.
+
+**Both networks need internet for the display to update.** If either the MWO
+LAN or the PE network loses connectivity, calls stop arriving. Supabase itself
+is a third dependency. Nothing in this design can fall back to a local path,
+because there isn't one.
+
+The display machine itself has no internet access, which is a good thing: it
+depends only on the Qtech equipment beside it on the PE network.

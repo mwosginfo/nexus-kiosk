@@ -484,8 +484,9 @@ footer {
             </defs>
 
             <!-- lane label -->
-            <text x="8" y="24" class="dgm-lbl" fill="var(--text-3)">OFFICE LAN</text>
-            <text x="332" y="24" class="dgm-lbl" fill="var(--text-3)">INTERNET</text>
+            <text x="8" y="24" class="dgm-lbl" fill="var(--text-3)">MWO LAN</text>
+            <text x="240" y="24" class="dgm-lbl" fill="var(--text-3)">INTERNET</text>
+            <text x="462" y="24" class="dgm-lbl" fill="var(--text-3)">PE NETWORK</text>
 
             <!-- boxes -->
             <g>
@@ -506,18 +507,19 @@ footer {
             <g>
               <rect x="686" y="44" width="150" height="62" rx="4" fill="var(--surface-2)" stroke="var(--border-2)"/>
               <text x="761" y="70" text-anchor="middle" class="dgm-box" fill="var(--text)">Qtech</text>
-              <text x="761" y="88" text-anchor="middle" class="dgm-sub" fill="var(--text-3)">AWS ap-southeast-1</text>
+              <text x="761" y="88" text-anchor="middle" class="dgm-sub" fill="var(--text-3)">on premises</text>
             </g>
             <g>
               <rect x="686" y="158" width="150" height="52" rx="4" fill="var(--surface-2)" stroke="var(--border-2)"/>
-              <text x="761" y="189" text-anchor="middle" class="dgm-box" fill="var(--text)">Display wall</text>
+              <text x="761" y="183" text-anchor="middle" class="dgm-box" fill="var(--text)">Display wall</text>
+              <text x="761" y="199" text-anchor="middle" class="dgm-sub" fill="var(--text-3)">no internet access</text>
             </g>
 
             <!-- forward arrows -->
             <line x1="160" y1="75" x2="216" y2="75" stroke="var(--border-2)" stroke-width="1.5" marker-end="url(#ar)"/>
             <line x1="400" y1="75" x2="456" y2="75" stroke="var(--border-2)" stroke-width="1.5" marker-end="url(#ar)"/>
             <line x1="624" y1="75" x2="680" y2="75" stroke="var(--accent)" stroke-width="1.75" marker-end="url(#arA)"/>
-            <text x="652" y="66" text-anchor="middle" class="dgm-lbl" fill="var(--accent)">HTTPS</text>
+            <text x="652" y="66" text-anchor="middle" class="dgm-lbl" fill="var(--accent)">LOCAL</text>
             <line x1="761" y1="108" x2="761" y2="152" stroke="var(--border-2)" stroke-width="1.5" marker-end="url(#ar)"/>
 
             <!-- health return path -->
@@ -527,18 +529,24 @@ footer {
             <path d="M 262 140 L 200 140 L 200 180 L 83 180 L 83 112" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arA)"/>
             <text x="150" y="196" text-anchor="middle" class="dgm-lbl" fill="var(--accent)">Nexus reads state</text>
 
-            <text x="542" y="232" text-anchor="middle" class="dgm-sub" fill="var(--text-3)">no connection between the bridge and Nexus in either direction</text>
+            <text x="542" y="232" text-anchor="middle" class="dgm-sub" fill="var(--text-3)">Nexus and the bridge are on separate networks with no local path between them</text>
           </svg>
         </div>
         <figcaption>Solid lines carry queue calls. Dashed lines carry the bridge&rsquo;s own health, which reaches Nexus through Supabase rather than directly.</figcaption>
       </figure>
 
-      <h3>Why a Raspberry Pi</h3>
-      <p>Nexus runs on a Synology NAS on the office LAN and holds all client records. Putting outbound internet access on that host to reach a display vendor is unnecessary exposure. The Pi is a small, isolated, single-purpose device that holds no client data and can be rebuilt from scratch in half an hour.</p>
+      <h3>Two networks, not one</h3>
+      <p>Nexus sits on the MWO office LAN. The bridge, the Qtech equipment and the display sit on the PE network. These are separate networks with no local path between them, which is why the call travels out to Supabase and back rather than crossing the office directly. Supabase is not an incidental hop &mdash; it is the only thing joining the two sides.</p>
+      <p>The bridge and the Qtech equipment both reach the internet; the machine driving the display does not, and depends only on the Qtech equipment beside it.</p>
 
       <h3>Why the bridge does not talk to Nexus</h3>
-      <p>Nexus already publishes queue state to Supabase for its own purposes &mdash; that is how the check-in kiosks and queue displays work today. The bridge reads that existing stream. Nothing was added to Nexus, no port was opened on the NAS, and the bridge holds no credential that would let it reach anything on the office LAN.</p>
+      <p>Nexus already publishes queue state to Supabase for its own purposes &mdash; that is how the check-in kiosks and queue displays work today. The bridge reads that existing stream. Nothing was added to Nexus, and the bridge holds no credential that would let it reach anything on the MWO network.</p>
       <p>Health travels back the same way: the bridge keeps a row current in Supabase, and Nexus reads it. Neither system opens a socket to the other.</p>
+
+      <h3>What this costs</h3>
+      <p>Two things follow from the split, and neither has a local workaround.</p>
+      <p><strong>Latency has a budget, and most of it is spent before the bridge sees anything.</strong> Qtech&rsquo;s Phase&nbsp;2 criterion is a display update within two seconds of a call. Nexus mirrors each call to Supabase on a two-second cycle, which alone accounts for up to two of those seconds; the network legs add a few hundred milliseconds and the bridge itself adds almost nothing. Typical total is around 1.2&nbsp;seconds and the worst case is around 2.6. This should be measured during the pilot rather than assumed, and if it fails, the place to look is the Nexus mirror cadence rather than the bridge.</p>
+      <p><strong>Both networks need internet for the display to update.</strong> If either the MWO LAN or the PE network loses connectivity, calls stop arriving, and there is no local path to fall back to.</p>
     </section>
 
     <!-- ══ 3 ══ -->
