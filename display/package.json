@@ -15,7 +15,9 @@
     "dev": "tsc -p tsconfig.json --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/*.test.js",
-    "smoke": "npm run build && node test/smoke.mjs"
+    "smoke": "npm run build && node test/smoke.mjs",
+    "stub": "npm run build && node dist/src/devtools/qtech-stub.js",
+    "demo": "npm run build && node dist/src/devtools/demo.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.0",

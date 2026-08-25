@@ -19,7 +19,10 @@ back to Supabase for Nexus to read.
 > the default; the HTTPS transport is retained as a fallback. One thing is
 > still unconfirmed — how a message is framed on the stream — so all three
 > plausible conventions are implemented and `QTECH_TCP_FRAMING` selects one.
-> See `docs/QTECH-TCP-QUESTIONS.md`.
+> `docs/TCP-PROTOCOL.md` is the proposed specification, with a working
+> reference server (`npm run stub`) and a scenario runner (`npm run demo`)
+> so it can be exercised rather than only read. Remaining questions are in
+> `docs/QTECH-TCP-QUESTIONS.md`.
 
 ## Scope
 
@@ -223,9 +226,21 @@ names, emails, or ref codes.
 ```bash
 npm install
 npm run typecheck
-npm test          # 44 tests, no network or Supabase needed
+npm test          # 80 tests, no network or Supabase needed
 npm run build
 ```
+
+### Prototype tools
+
+```bash
+npm run stub -- --port 9100 --branch <uuid> --counters 1,2,3
+npm run demo      # drives every acceptance scenario, pass/fail per scenario
+```
+
+`npm run stub` is a reference Qtech server implementing `docs/TCP-PROTOCOL.md`:
+the wall behaviour, the 10-minute duplicate window, and all three error codes.
+`--fail-rate` and `--delay` inject faults to exercise retry and timeout paths.
+It is a development tool and is never installed as a service.
 
 The delivery tests run against a real local HTTP server standing in for Qtech,
 and assert the behaviours their §4 makes mandatory: retry only on transient
