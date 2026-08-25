@@ -23,14 +23,20 @@ export type { AttemptResult } from './transport.js';
  * because the outcome will not change on repeat.
  */
 export class QtechHttpTransport implements CallTransport {
-  private readonly authHeader: string;
+  private readonly authHeader: string | null;
 
   constructor(
     private readonly config: Config,
     private readonly logger: Logger,
   ) {
-    const raw = `${config.qtechUsername}:${config.qtechPassword}`;
-    this.authHeader = `Basic ${Buffer.from(raw, 'utf8').toString('base64')}`;
+    // The on-premises protocol carries no authentication, so a credential is
+    // now optional. Send the header only when one is configured.
+    if (config.qtechUsername && config.qtechPassword) {
+      const raw = `${config.qtechUsername}:${config.qtechPassword}`;
+      this.authHeader = `Basic ${Buffer.from(raw, 'utf8').toString('base64')}`;
+    } else {
+      this.authHeader = null;
+    }
   }
 
   buildRequest(event: CallEvent): CallRequest {
@@ -82,7 +88,7 @@ export class QtechHttpTransport implements CallTransport {
     const res = await this.fetchWithTimeout(`${this.baseUrl()}/call`, {
       method: 'POST',
       headers: {
-        Authorization: this.authHeader,
+        ...this.authHeaders(),
         'Content-Type': 'application/json',
         Accept: 'application/json',
       },
@@ -103,7 +109,7 @@ export class QtechHttpTransport implements CallTransport {
     try {
       const res = await this.fetchWithTimeout(`${this.baseUrl()}/health`, {
         method: 'GET',
-        headers: { Authorization: this.authHeader, Accept: 'application/json' },
+        headers: { ...this.authHeaders(), Accept: 'application/json' },
       });
       // Drain so the socket can be reused.
       await res.text().catch(() => '');
@@ -120,7 +126,7 @@ export class QtechHttpTransport implements CallTransport {
       res = await this.fetchWithTimeout(`${this.baseUrl()}${path}`, {
         method: 'POST',
         headers: {
-          Authorization: this.authHeader,
+          ...this.authHeaders(),
           'Content-Type': 'application/json',
           Accept: 'application/json',
         },
@@ -185,6 +191,10 @@ export class QtechHttpTransport implements CallTransport {
       detail: truncate(text),
       latencyMs,
     };
+  }
+
+  private authHeaders(): Record<string, string> {
+    return this.authHeader ? { Authorization: this.authHeader } : {};
   }
 
   private baseUrl(): string {

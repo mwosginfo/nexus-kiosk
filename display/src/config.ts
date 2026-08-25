@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isSecureOrPrivate, isTlsOrLoopback } from './net-address.js';
 
 /**
  * Configuration for the bridge, parsed from the environment exactly once at
@@ -29,20 +30,6 @@ const csvNumbers = z
  * a valid input to `ConfigSchema`, which makes programmatic construction (and
  * every test that builds a config) unsound.
  */
-/** Allows http:// only for 127.0.0.1 / ::1 / localhost, for the test stubs. */
-function isHttpsOrLoopback(raw: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return false;
-  }
-  if (url.protocol === 'https:') return true;
-  if (url.protocol !== 'http:') return false;
-  const host = url.hostname.replace(/^\[|\]$/g, '');
-  return host === '127.0.0.1' || host === '::1' || host === 'localhost';
-}
-
 const boolish = z.union([
   z.boolean(),
   z.enum(['true', 'false', '1', '0']).transform((v) => v === 'true' || v === '1'),
@@ -53,28 +40,41 @@ export const ConfigSchema = z.object({
   /** Distinguishes this bridge instance in the health table. One row per id. */
   bridgeId: z.string().min(1).default('mwo-owwa-primary'),
 
-  // ── Supabase (the bridge's ONLY inbound dependency) ─────────────────────
-  supabaseUrl: z.string().url(),
+  // ── Supabase ────────────────────────────────────────────────────────────
+  //
+  // Since Qtech moved on-premises with no TLS and no credential, this is the
+  // only leg that crosses the internet and the only one carrying a secret.
+  // It is therefore the bridge's entire security boundary, and TLS here is
+  // not negotiable. Loopback is exempt so the tests can use a local stub.
+  supabaseUrl: z
+    .string()
+    .url()
+    .refine(isTlsOrLoopback, {
+      message:
+        'must use https:// — this leg crosses the internet and carries the Supabase key',
+    }),
   supabaseKey: z.string().min(1),
 
   // ── Qtech ───────────────────────────────────────────────────────────────
   /**
-   * e.g. https://<tenant>.qtechqms.com/api/v1/ops — no trailing slash.
+   * The Qtech endpoint. On-premises as of 2026-08-20, so plaintext is expected
+   * here and TLS is not offered.
    *
-   * Must be HTTPS. Qtech §3 is unambiguous: "HTTPS only, TLS 1.2 or higher.
-   * Plain HTTP is not offered for this integration." Without this check a
-   * mistyped env var would ship the Basic-auth secret in cleartext and the
-   * only symptom would be that it worked. Loopback is exempt so the delivery
-   * tests can run against a local stub.
+   * Plaintext is accepted only to a private address. Their justification for
+   * dropping TLS is that the link never leaves the building; if the endpoint
+   * is a public host then it does leave the building and the justification
+   * does not survive with it, so the bridge refuses to start.
    */
   qtechBaseUrl: z
     .string()
     .url()
-    .refine(isHttpsOrLoopback, {
-      message: 'must use https:// (Qtech does not offer plain HTTP)',
+    .refine(isSecureOrPrivate, {
+      message:
+        'plaintext is only allowed to a private address — a public host must use TLS',
     }),
-  qtechUsername: z.string().min(1),
-  qtechPassword: z.string().min(1),
+  /** Optional since 2026-08-20: the on-premises protocol carries no auth. */
+  qtechUsername: z.string().optional(),
+  qtechPassword: z.string().optional(),
   /** Issued by Qtech at onboarding; constant for the life of the branch. */
   qtechBranchUuid: z.string().min(1),
   /** Client timeout in ms. Qtech responds within 5s; they recommend 10s. */
