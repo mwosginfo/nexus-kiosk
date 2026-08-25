@@ -1,6 +1,6 @@
 import type { Logger } from '../logger.js';
 import { assertNever, type CallCandidate, type CallEvent } from '../types.js';
-import type { QtechClient } from '../qtech/client.js';
+import type { CallTransport } from '../qtech/transport.js';
 import type { HealthSink } from '../supabase/health-writer.js';
 import { deriveEventId } from '../domain/event-id.js';
 import { PerCounterQueue } from './serial-queue.js';
@@ -14,7 +14,7 @@ export class Dispatcher {
   private readonly queue = new PerCounterQueue();
 
   constructor(
-    private readonly qtech: QtechClient,
+    private readonly qtech: CallTransport,
     private readonly health: HealthSink,
     private readonly logger: Logger,
     private readonly abort: AbortSignal,

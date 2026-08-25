@@ -2,6 +2,7 @@ import type { Config } from '../config.js';
 import type { Logger } from '../logger.js';
 import { safeError } from '../logger.js';
 import type { CallEvent } from '../types.js';
+import type { AttemptResult, CallTransport } from './transport.js';
 import {
   CallRequestSchema,
   CallResponseSchema,
@@ -11,17 +12,17 @@ import {
   type CallRequest,
 } from './schemas.js';
 
-/**
- * Outcome of one HTTP attempt. `retryable` encodes the Qtech §4 rule:
- * retry only on network failure, timeout, HTTP 5xx or HTTP 429; never on a
- * business error, because the outcome will not change on repeat.
- */
-export type AttemptResult =
-  | { readonly kind: 'success'; readonly httpStatus: number; readonly duplicate: boolean; readonly latencyMs: number }
-  | { readonly kind: 'business-error'; readonly httpStatus: number; readonly code: string | null; readonly detail: string; readonly latencyMs: number }
-  | { readonly kind: 'transient'; readonly httpStatus: number | null; readonly detail: string; readonly latencyMs: number };
+export type { AttemptResult } from './transport.js';
 
-export class QtechClient {
+/**
+ * HTTPS REST implementation of `CallTransport`, per the Qtech integration
+ * response of 5 August 2026 §1.
+ *
+ * The three outcomes it reports encode their §4 retry rule: retry only on
+ * network failure, timeout, HTTP 5xx or HTTP 429; never on a business error,
+ * because the outcome will not change on repeat.
+ */
+export class QtechHttpTransport implements CallTransport {
   private readonly authHeader: string;
 
   constructor(
@@ -212,3 +213,9 @@ function safeJson(text: string): unknown {
 function truncate(text: string): string {
   return text.replace(/\s+/g, ' ').trim().slice(0, 300);
 }
+
+/**
+ * Historical name, kept so existing call sites and docs keep working while the
+ * TCP transport is specified. Prefer `QtechHttpTransport` in new code.
+ */
+export { QtechHttpTransport as QtechClient };

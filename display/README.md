@@ -14,6 +14,12 @@ never to Nexus, in either direction. Nexus already writes call state into
 Supabase for its own queue; the bridge reads that, and writes its own health
 back to Supabase for Nexus to read.
 
+> **Transport change pending.** Qtech advised on 2026-08-20 that the interface
+> will move from HTTPS REST to TCP, with the workflow unchanged. The transport
+> interface is extracted (`src/qtech/transport.ts`) so the swap is contained,
+> but the protocol is not yet specified — see `docs/QTECH-TCP-QUESTIONS.md`.
+> Everything below describes the HTTPS transport currently implemented.
+
 ## Scope
 
 Implements exactly what the Qtech integration response (5 August 2026)
