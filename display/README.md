@@ -19,10 +19,13 @@ back to Supabase for Nexus to read.
 > the default; the HTTPS transport is retained as a fallback. One thing is
 > still unconfirmed — how a message is framed on the stream — so all three
 > plausible conventions are implemented and `QTECH_TCP_FRAMING` selects one.
-> `docs/TCP-PROTOCOL.md` is the proposed specification, with a working
-> reference server (`npm run stub`) and a scenario runner (`npm run demo`)
-> so it can be exercised rather than only read. Remaining questions are in
-> `docs/QTECH-TCP-QUESTIONS.md`.
+> Qtech supplied their reference client on 2026-08-20 and the implementation
+> now matches it: newline-framed JSON to port 4009, one connection per call,
+> a shared token in every message, and **no reply**. See
+> `docs/QTECH-PROTOCOL-ACTUAL.md` for what that costs — retry classification
+> and duplicate suppression do not survive fire-and-forget.
+> `docs/TCP-PROTOCOL.md` is the earlier proposal, kept for the parts Qtech
+> have still not addressed.
 
 ## Scope
 
@@ -176,7 +179,10 @@ See `.env.example` for the full annotated list. The ones that matter:
 | Variable | Default | Notes |
 |---|---|---|
 | `QTECH_TRANSPORT` | `tcp` | `tcp` (live) or `http` (fallback) |
-| `QTECH_TCP_HOST` / `QTECH_TCP_PORT` | — | Qtech equipment on the PE network. Plaintext is accepted only to a private address |
+| `QTECH_TCP_HOST` / `QTECH_TCP_PORT` | — / `4009` | Qtech equipment on the PE network. Plaintext is accepted only to a private address |
+| `QTECH_CLIENT_ID` | `mwo-owwa` | Sent as `clientId` |
+| `QTECH_AUTH_TOKEN` | — | Shared secret sent in every message |
+| `QTECH_ACK_WAIT_MS` | `250` | Grace period for a reply their protocol does not promise. `0` mirrors their client |
 | `QTECH_TCP_FRAMING` | `newline` | `newline`, `length` or `raw` — see `src/qtech/framing.ts` |
 | `QTECH_BASE_URL` | — | HTTP fallback only |
 | `QTECH_BRANCH_UUID` | — | Issued at onboarding |

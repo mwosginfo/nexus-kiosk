@@ -79,12 +79,7 @@ const qtech = await new Promise((resolve) => {
         buf = buf.subarray(i + 1);
         const parsed = JSON.parse(msg);
         calls.callBodies.push({ body: parsed });
-        socket.write(
-          JSON.stringify({
-            response: 'Success',
-            message: { eventId: parsed.eventId, status: 'ON_CALL', duplicate: false },
-          }) + '\n',
-        );
+        // Qtech's endpoint replies with nothing; mirror that.
       }
     });
     socket.on('error', () => {});
@@ -103,7 +98,9 @@ const child = spawn(process.execPath, ['dist/src/index.js'], {
     QTECH_TCP_HOST: '127.0.0.1',
     QTECH_TCP_PORT: String(qtech.port),
     QTECH_TCP_FRAMING: 'newline',
-    QTECH_BRANCH_UUID: 'branch-1',
+    QTECH_BRANCH_UUID: 'mwo',
+    QTECH_AUTH_TOKEN: 'QT-MWO-smoke',
+    QTECH_ACK_WAIT_MS: '100',
     HEARTBEAT_INTERVAL_MS: '5000',
     RECONCILE_INTERVAL_MS: '2000',
     QTECH_HEALTH_INTERVAL_MS: '30000',
@@ -154,18 +151,23 @@ assert.ok(
 assert.equal(calls.callBodies.length, 1, 'exactly one call delivered, not one per poll');
 const delivered = calls.callBodies[0];
 assert.deepEqual(Object.keys(delivered.body).sort(), [
+  'authToken',
   'branchUUID',
+  'clientId',
   'counterName',
-  'eventId',
   'queueNo',
+  'silent',
   'ticketID',
   'timestamp',
+  'type',
 ]);
+assert.equal(delivered.body.type, 'CALL');
 assert.equal(delivered.body.ticketID, CALLED_ROW.id, 'ticketID is the opaque kiosk_checkins id');
 assert.equal(delivered.body.queueNo, 'A045');
 assert.equal(delivered.body.counterName, '7');
-assert.equal(delivered.body.branchUUID, 'branch-1');
-assert.match(delivered.body.eventId, /^[0-9a-f-]{36}$/);
+assert.equal(delivered.body.branchUUID, 'mwo');
+// No eventId on the wire: Qtech's protocol has no idempotency key.
+assert.equal('eventId' in delivered.body, false);
 
 const beat = calls.health.at(-1);
 const row = Array.isArray(beat) ? beat[0] : beat;

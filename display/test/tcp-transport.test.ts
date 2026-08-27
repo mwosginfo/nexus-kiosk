@@ -65,8 +65,11 @@ function makeConfig(port: number, over: Partial<Config> = {}): Config {
     qtechTransport: 'tcp',
     qtechTcpHost: '127.0.0.1',
     qtechTcpPort: port,
-    qtechBranchUuid: 'c761bfe7',
+    qtechBranchUuid: 'mwo',
+    qtechClientId: 'mwo-owwa',
+    qtechAuthToken: 'QT-MWO-testtoken',
     qtechTimeoutMs: 2_000,
+    qtechAckWaitMs: 150,
     ...over,
   });
 }
@@ -91,43 +94,71 @@ function event(over: Partial<CallEvent> = {}): CallEvent {
   };
 }
 
-function success(msg: string, duplicate = false): string {
-  const req = JSON.parse(msg) as { eventId: string };
-  return JSON.stringify({
-    response: 'Success',
-    message: { eventId: req.eventId, status: 'ON_CALL', duplicate },
-  });
-}
-
-test('sends the same JSON payload the HTTP interface used', async () => {
-  const h = await startServer((msg, socket) => {
-    socket.write(encodeFrame(success(msg), 'newline'));
-  });
+test('sends exactly the fields Qtech\'s own client sends', async () => {
+  // Transcribed from the call.bat reference. Extra fields are not added: their
+  // parser has never been shown one, and with no error channel we would never
+  // learn if it rejected the message.
+  const h = await startServer(() => { /* fire-and-forget, no reply */ });
   try {
     const result = await transport(h.port).call(event());
     assert.equal(result.kind, 'success');
 
     const sent = JSON.parse(h.received[0]!) as Record<string, unknown>;
     assert.deepEqual(Object.keys(sent).sort(), [
+      'authToken',
       'branchUUID',
+      'clientId',
       'counterName',
-      'eventId',
       'queueNo',
+      'silent',
       'ticketID',
       'timestamp',
+      'type',
     ]);
+    assert.equal(sent.type, 'CALL');
+    assert.equal(sent.clientId, 'mwo-owwa');
+    assert.equal(sent.branchUUID, 'mwo');
     assert.equal(sent.queueNo, 'A045');
     assert.equal(sent.counterName, '7');
+    assert.equal(sent.silent, false, 'silent is always present, not omitted');
     assert.equal(sent.ticketID, '11111111-1111-4111-8111-111111111111');
   } finally {
     h.server.close();
   }
 });
 
-test('no personal data crosses the wire', async () => {
-  const h = await startServer((msg, socket) => {
-    socket.write(encodeFrame(success(msg), 'newline'));
+test('no eventId is put on the wire', async () => {
+  // Their protocol has no idempotency key. Sending one anyway risks a silent
+  // rejection we could never observe.
+  const h = await startServer(() => { /* no reply */ });
+  try {
+    await transport(h.port).call(event());
+    const sent = JSON.parse(h.received[0]!) as Record<string, unknown>;
+    assert.equal('eventId' in sent, false);
+  } finally {
+    h.server.close();
+  }
+});
+
+test('a message is newline-terminated, as their client writes it', async () => {
+  const raw: Buffer[] = [];
+  const server = createServer((socket) => {
+    socket.on('data', (c) => raw.push(c));
+    socket.on('error', () => { /* ignore */ });
   });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    await transport((server.address() as AddressInfo).port).call(event());
+    await new Promise((r) => setTimeout(r, 100));
+    const bytes = Buffer.concat(raw);
+    assert.equal(bytes[bytes.length - 1], 0x0a, 'must end with \\n');
+  } finally {
+    server.close();
+  }
+});
+
+test('no personal data crosses the wire', async () => {
+  const h = await startServer(() => { /* no reply */ });
   try {
     await transport(h.port).call(event());
     const sent = JSON.parse(h.received[0]!) as Record<string, unknown>;
@@ -156,10 +187,34 @@ test('no personal data crosses the wire', async () => {
   }
 });
 
+test('a silent server is the normal path and counts as sent', async () => {
+  // Qtech's client writes and closes without reading. A server that never
+  // replies is expected behaviour, not a failure.
+  const h = await startServer(() => { /* accept, say nothing */ });
+  try {
+    const started = Date.now();
+    const result = await transport(h.port).call(event());
+    assert.equal(result.kind, 'success');
+    assert.ok(Date.now() - started < 1_500, 'must not wait for a reply that will not come');
+  } finally {
+    h.server.close();
+  }
+});
+
+test('with ack-wait disabled it mirrors their client exactly', async () => {
+  const h = await startServer(() => { /* no reply */ });
+  try {
+    const started = Date.now();
+    const result = await transport(h.port, { qtechAckWaitMs: 0 }).call(event());
+    assert.equal(result.kind, 'success');
+    assert.ok(Date.now() - started < 200, 'no grace period at all');
+  } finally {
+    h.server.close();
+  }
+});
+
 test('length-prefixed framing works end to end', async () => {
-  const h = await startServer((msg, socket) => {
-    socket.write(encodeFrame(success(msg), 'length'));
-  }, 'length');
+  const h = await startServer(() => { /* no reply */ }, 'length');
   try {
     const result = await transport(h.port, { qtechTcpFraming: 'length' }).call(event());
     assert.equal(result.kind, 'success');
@@ -169,49 +224,23 @@ test('length-prefixed framing works end to end', async () => {
   }
 });
 
-test('raw framing, where the close delimits the reply, works end to end', async () => {
-  const h = await startServer((msg, socket) => {
-    socket.write(encodeFrame(success(msg), 'raw'));
-    socket.end();
-  }, 'raw');
-  try {
-    const result = await transport(h.port, { qtechTcpFraming: 'raw' }).call(event());
-    assert.equal(result.kind, 'success');
-  } finally {
-    h.server.close();
-  }
-});
-
-test('a reply delivered in fragments is still understood', async () => {
-  // The server writes the response one byte at a time. A reader that parses
-  // whatever is in the buffer fails here; an incremental one does not.
-  const h = await startServer((msg, socket) => {
-    const frame = encodeFrame(success(msg), 'newline');
-    for (const byte of frame) socket.write(Buffer.from([byte]));
+test('an unpromised acknowledgement is picked up when one arrives', async () => {
+  // Their protocol promises nothing, but if the endpoint does reply we take
+  // it, and the retry rule works properly again without a code change.
+  const h = await startServer((_msg, socket) => {
+    socket.write(encodeFrame(JSON.stringify({ response: 'Success' }), 'newline'));
   });
   try {
     const result = await transport(h.port).call(event());
     assert.equal(result.kind, 'success');
+    assert.equal(result.kind === 'success' && result.httpStatus, 1, 'marked acknowledged');
   } finally {
     h.server.close();
   }
 });
 
-test('a duplicate reply is reported as such', async () => {
-  const h = await startServer((msg, socket) => {
-    socket.write(encodeFrame(success(msg, true), 'newline'));
-  });
-  try {
-    const result = await transport(h.port).call(event());
-    assert.equal(result.kind, 'success');
-    assert.equal(result.kind === 'success' && result.duplicate, true);
-  } finally {
-    h.server.close();
-  }
-});
-
-test('a business error is reported and not classed as retryable', async () => {
-  for (const code of ['BRANCH_NOT_FOUND', 'COUNTER_UNKNOWN', 'VALIDATION_ERROR']) {
+test('an error acknowledgement is reported and not retried', async () => {
+  for (const code of ['BRANCH_NOT_FOUND', 'COUNTER_UNKNOWN', 'VALIDATION_ERROR', 'AUTH_FAILED']) {
     const h = await startServer((_msg, socket) => {
       socket.write(encodeFrame(JSON.stringify({ response: 'Error', code }), 'newline'));
     });
@@ -225,69 +254,79 @@ test('a business error is reported and not classed as retryable', async () => {
   }
 });
 
+test('an acknowledgement delivered in fragments is still understood', async () => {
+  const h = await startServer((_msg, socket) => {
+    const frame = encodeFrame(JSON.stringify({ response: 'Success' }), 'newline');
+    for (const byte of frame) socket.write(Buffer.from([byte]));
+  });
+  try {
+    const result = await transport(h.port).call(event());
+    assert.equal(result.kind, 'success');
+  } finally {
+    h.server.close();
+  }
+});
+
 test('a refused connection is transient, so the retry policy applies', async () => {
   // Port 1 on loopback: nothing is listening.
   const result = await transport(1).call(event());
   assert.equal(result.kind, 'transient');
 });
 
-test('a silent hang times out as transient rather than blocking forever', async () => {
-  const h = await startServer(() => { /* accept, never reply */ });
-  try {
-    const started = Date.now();
-    const result = await transport(h.port, { qtechTimeoutMs: 1_000 }).call(event());
-    assert.equal(result.kind, 'transient');
-    assert.ok(Date.now() - started < 3_000, 'must give up on its own timeout');
-  } finally {
-    h.server.close();
-  }
+test('an unreachable host fails as transient, so the retry policy applies', async () => {
+  // Under fire-and-forget the only failures we can observe are at the
+  // connection level. This is one of them: nothing answers at all.
+  const t = new QtechTcpTransport(
+    ConfigSchema.parse({
+      supabaseUrl: 'https://example.supabase.co',
+      supabaseKey: 'k',
+      qtechTransport: 'tcp',
+      qtechTcpHost: '10.255.255.1',
+      qtechTcpPort: 4009,
+      qtechBranchUuid: 'mwo',
+      qtechAuthToken: 't',
+      qtechTimeoutMs: 1_000,
+    }),
+    createLogger({ logLevel: 'error', bridgeId: 'test' }),
+  );
+  const started = Date.now();
+  const result = await t.call(event());
+  assert.equal(result.kind, 'transient');
+  assert.ok(Date.now() - started < 3_000, 'must give up on its own timeout');
 });
 
-test('a peer that hangs up without replying is transient', async () => {
+test('a peer that hangs up after accepting the write counts as sent', async () => {
+  // Indistinguishable from their normal behaviour: the bytes were written and
+  // accepted. This is the honest limit of a fire-and-forget protocol.
   const h = await startServer((_msg, socket) => socket.destroy());
   try {
     const result = await transport(h.port).call(event());
-    assert.equal(result.kind, 'transient');
+    assert.equal(result.kind, 'success');
   } finally {
     h.server.close();
   }
 });
 
-test('a non-JSON reply is a business error, not an endless retry', async () => {
+test('a non-JSON acknowledgement is a business error, not an endless retry', async () => {
   const h = await startServer((_msg, socket) => {
     socket.write(encodeFrame('<html>gateway</html>', 'newline'));
   });
   try {
     const result = await transport(h.port).call(event());
     assert.equal(result.kind, 'business-error');
-    assert.equal(result.kind === 'business-error' && result.code, 'UNPARSEABLE_RESPONSE');
+    assert.equal(result.kind === 'business-error' && result.code, 'UNPARSEABLE_ACK');
   } finally {
     h.server.close();
   }
 });
 
-test('valid JSON in an unexpected shape is a business error', async () => {
-  const h = await startServer((_msg, socket) => {
-    socket.write(encodeFrame(JSON.stringify({ ok: true }), 'newline'));
-  });
-  try {
-    const result = await transport(h.port).call(event());
-    assert.equal(result.kind, 'business-error');
-    assert.equal(result.kind === 'business-error' && result.code, 'UNEXPECTED_RESPONSE_SHAPE');
-  } finally {
-    h.server.close();
-  }
-});
-
-test('silent is sent only when set', async () => {
-  const h = await startServer((msg, socket) => {
-    socket.write(encodeFrame(success(msg), 'newline'));
-  });
+test('silent is always present, true only when set', async () => {
+  const h = await startServer(() => { /* no reply */ });
   try {
     const t = transport(h.port);
     await t.call(event());
     await t.call(event({ silent: true, eventId: 'aaaaaaaa-1111-5111-8111-111111111111' }));
-    assert.equal((JSON.parse(h.received[0]!) as Record<string, unknown>).silent, undefined);
+    assert.equal((JSON.parse(h.received[0]!) as Record<string, unknown>).silent, false);
     assert.equal((JSON.parse(h.received[1]!) as Record<string, unknown>).silent, true);
   } finally {
     h.server.close();
@@ -300,9 +339,6 @@ test('each call uses its own connection', async () => {
   let connections = 0;
   const server = createServer((socket) => {
     connections += 1;
-    socket.on('data', () => {
-      socket.write(encodeFrame(JSON.stringify({ response: 'Success', message: {} }), 'newline'));
-    });
     socket.on('error', () => { /* ignore */ });
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));

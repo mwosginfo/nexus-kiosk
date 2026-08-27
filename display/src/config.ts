@@ -68,7 +68,23 @@ export const ConfigSchema = z.object({
 
   /** Qtech equipment on the PE network. */
   qtechTcpHost: z.string().min(1).default('127.0.0.1'),
-  qtechTcpPort: z.coerce.number().int().min(1).max(65_535).default(9100),
+  qtechTcpPort: z.coerce.number().int().min(1).max(65_535).default(4009),
+  /** Sent as `clientId`. Qtech's reference client uses 'mwo-owwa'. */
+  qtechClientId: z.string().min(1).default('mwo-owwa'),
+  /**
+   * Shared secret sent as `authToken` in every message. Qtech's response said
+   * the on-premises protocol carries no authentication; their reference client
+   * shows that it does. Treated as a secret: environment file only, never in
+   * source control.
+   */
+  qtechAuthToken: z.string().min(1).default('unset'),
+  /**
+   * How long to listen for a reply after writing. Qtech's client reads
+   * nothing, and their protocol promises nothing, but a reply costs nothing to
+   * accept and is the only way we would ever learn that a call was rejected.
+   * Set to 0 to mirror their client exactly.
+   */
+  qtechAckWaitMs: z.coerce.number().int().min(0).max(10_000).default(250),
   /**
    * How one JSON message is delimited on the stream. Not yet specified by
    * Qtech; all plausible conventions are implemented so confirming it is a
@@ -164,6 +180,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     qtechTransport: env.QTECH_TRANSPORT,
     qtechTcpHost: env.QTECH_TCP_HOST,
     qtechTcpPort: env.QTECH_TCP_PORT,
+    qtechClientId: env.QTECH_CLIENT_ID,
+    qtechAuthToken: env.QTECH_AUTH_TOKEN,
+    qtechAckWaitMs: env.QTECH_ACK_WAIT_MS,
     qtechTcpFraming: env.QTECH_TCP_FRAMING,
     qtechBaseUrl: env.QTECH_BASE_URL,
     qtechUsername: env.QTECH_USERNAME,

@@ -16,7 +16,8 @@ import type { AttemptResult } from '../qtech/transport.js';
  */
 
 const PORT = 19_100;
-const BRANCH = 'c761bfe7-0000-4000-8000-000000000001';
+const BRANCH = 'mwo';
+const TOKEN = 'QT-MWO-demotoken';
 
 function transport(): QtechTcpTransport {
   return new QtechTcpTransport(
@@ -27,7 +28,9 @@ function transport(): QtechTcpTransport {
       qtechTcpHost: '127.0.0.1',
       qtechTcpPort: PORT,
       qtechBranchUuid: BRANCH,
+      qtechAuthToken: TOKEN,
       qtechTimeoutMs: 3_000,
+      qtechAckWaitMs: 200,
     }),
     createLogger({ logLevel: 'error', bridgeId: 'demo' }),
   );
@@ -78,7 +81,9 @@ async function main(): Promise<void> {
       new URL('./qtech-stub.js', import.meta.url).pathname,
       '--port', String(PORT),
       '--branch', BRANCH,
+      '--token', TOKEN,
       '--counters', '3,5,7',
+      '--reply',
       '--quiet',
     ],
     { stdio: 'inherit' },
@@ -88,6 +93,12 @@ async function main(): Promise<void> {
   const t = transport();
 
   try {
+    process.stdout.write(
+      '\n  The reference server is running with --reply, so error codes are\n' +
+      '  visible. Qtech\'s own endpoint replies with nothing, in which case\n' +
+      '  every scenario below reports success and the failures are invisible.\n',
+    );
+
     heading('Phase 1 — interface conformance');
 
     check('liveness', await t.health(), 'endpoint accepts connections');
@@ -110,6 +121,8 @@ async function main(): Promise<void> {
         qtechTcpHost: '127.0.0.1',
         qtechTcpPort: PORT,
         qtechBranchUuid: 'wrong-branch',
+        qtechAuthToken: TOKEN,
+        qtechAckWaitMs: 200,
       }),
       createLogger({ logLevel: 'error', bridgeId: 'demo' }),
     );
@@ -144,18 +157,31 @@ async function main(): Promise<void> {
     await t.call(original);
     const recall = await t.call({ ...original, eventId: randomUUID() });
     check(
-      'a recall re-announces: same ticket, new event id',
-      recall.kind === 'success' && !recall.duplicate,
+      'a recall re-announces: same ticket',
+      recall.kind === 'success',
       describe(recall),
     );
 
     heading('Phase 3 — failure handling');
 
-    const replay = await t.call(original);
+    const badToken = new QtechTcpTransport(
+      ConfigSchema.parse({
+        supabaseUrl: 'https://example.supabase.co',
+        supabaseKey: 'unused',
+        qtechTransport: 'tcp',
+        qtechTcpHost: '127.0.0.1',
+        qtechTcpPort: PORT,
+        qtechBranchUuid: BRANCH,
+        qtechAuthToken: 'WRONG',
+        qtechAckWaitMs: 200,
+      }),
+      createLogger({ logLevel: 'error', bridgeId: 'demo' }),
+    );
+    const tokenResult = await badToken.call(event({ counterName: '7' }));
     check(
-      'a replayed event id is suppressed',
-      replay.kind === 'success' && replay.duplicate,
-      describe(replay),
+      'a bad auth token is rejected',
+      tokenResult.kind === 'business-error',
+      `${describe(tokenResult)}   — invisible against a silent endpoint`,
     );
 
     const silent = await t.call(event({ queueNo: '6003', counterName: '5', silent: true }));

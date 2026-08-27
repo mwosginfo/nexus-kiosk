@@ -30,6 +30,9 @@ interface Options {
   readonly host: string;
   readonly framing: TcpFraming;
   readonly branchUuid: string | null;
+  readonly authToken: string | null;
+  /** Mirror Qtech's client: accept the message and reply with nothing. */
+  readonly silentAck: boolean;
   readonly counters: readonly string[];
   readonly duplicateWindowMs: number;
   /** Reject this fraction of calls with a transient failure, to exercise retry. */
@@ -45,7 +48,17 @@ interface WallEntry {
   readonly announced: boolean;
 }
 
-const REQUIRED = ['eventId', 'ticketID', 'branchUUID', 'counterName', 'queueNo', 'timestamp'] as const;
+// Matches the fields Qtech's own `call.bat` reference client sends.
+const REQUIRED = [
+  'type',
+  'ticketID',
+  'clientId',
+  'branchUUID',
+  'counterName',
+  'queueNo',
+  'timestamp',
+  'authToken',
+] as const;
 
 function parseArgs(argv: readonly string[]): Options {
   const get = (name: string, fallback?: string): string | undefined => {
@@ -57,6 +70,8 @@ function parseArgs(argv: readonly string[]): Options {
     host: get('host', '127.0.0.1') ?? '127.0.0.1',
     framing: TcpFramingSchema.parse(get('framing', 'newline')),
     branchUuid: get('branch') ?? null,
+    authToken: get('token') ?? null,
+    silentAck: !argv.includes('--reply'),
     counters: (get('counters', '1,2,3,4,5,6,7,8,9,10') ?? '')
       .split(',')
       .map((c) => c.trim())
@@ -70,9 +85,6 @@ function parseArgs(argv: readonly string[]): Options {
 
 /** The wall: last number called at each counter. Never cleared, per §2. */
 const wall = new Map<string, WallEntry>();
-/** eventId -> the outcome first returned for it, and when. */
-const seen = new Map<string, { at: number; body: unknown }>();
-
 function ok(msg: Record<string, unknown>): unknown {
   return { response: 'Success', message: msg };
 }
@@ -106,20 +118,24 @@ function handle(raw: string, opts: Options): unknown {
     return err('VALIDATION_ERROR', 'ticketID exceeds 64 characters');
   }
 
-  const eventId = String(body.eventId);
   const ticketID = String(body.ticketID);
   const counterName = String(body.counterName);
   const queueNo = String(body.queueNo);
   const silent = body.silent === true;
 
-  // §4 — a repeat of the same eventId inside the window returns the original
-  // outcome and does not re-announce.
-  const prior = seen.get(eventId);
-  if (prior && Date.now() - prior.at < opts.duplicateWindowMs) {
-    const original = prior.body as { message?: Record<string, unknown> };
-    log(opts, `  duplicate  ${queueNo} -> counter ${counterName}  (suppressed)`);
-    return ok({ ...(original.message ?? {}), duplicate: true });
+  if (body.type !== 'CALL') {
+    return err('VALIDATION_ERROR', 'type');
   }
+  if (opts.authToken !== null && body.authToken !== opts.authToken) {
+    // Qtech's client would never learn this: it writes and closes. Recorded
+    // here so the failure is at least visible when testing against the stub.
+    log(opts, `  REJECTED   ${queueNo} -> counter ${counterName}  bad authToken`);
+    return err('AUTH_FAILED');
+  }
+
+  // NOTE: the protocol carries no eventId, so there is no duplicate window to
+  // apply. A repeated call re-announces. The only thing preventing a double
+  // announcement is the bridge's own detection cache.
 
   if (opts.branchUuid !== null && body.branchUUID !== opts.branchUuid) {
     return err('BRANCH_NOT_FOUND');
@@ -132,7 +148,6 @@ function handle(raw: string, opts: Options): unknown {
   wall.set(counterName, { queueNo, at: new Date(), announced: !silent });
 
   const response = ok({
-    eventId,
     ticketID,
     queueNo,
     counterName,
@@ -140,7 +155,6 @@ function handle(raw: string, opts: Options): unknown {
     serverTime: new Date().toISOString(),
     duplicate: false,
   });
-  seen.set(eventId, { at: Date.now(), body: response });
 
   log(opts, `  call       ${queueNo} -> counter ${counterName}${silent ? '  (silent)' : '  ♪ chime + voice'}`);
   paintWall(opts);
@@ -172,6 +186,10 @@ function main(): void {
     const reader = new FrameReader(opts.framing);
 
     const reply = (body: unknown): void => {
+      // Qtech's reference client never reads, and their server is assumed to
+      // behave the same way. --reply turns acknowledgement on so the bridge's
+      // optimistic-ack path can be exercised.
+      if (opts.silentAck) return;
       const json = JSON.stringify(body);
       const send = (): void => {
         socket.write(encodeFrame(json, opts.framing));
@@ -217,7 +235,8 @@ function main(): void {
         `  framing     ${opts.framing}\n` +
         `  branch      ${opts.branchUuid ?? '(any)'}\n` +
         `  counters    ${opts.counters.join(', ') || '(any)'}\n` +
-        `  duplicates  suppressed within ${Math.round(opts.duplicateWindowMs / 1000)}s\n` +
+        `  token       ${opts.authToken ?? '(any)'}\n` +
+        `  replies     ${opts.silentAck ? 'no — fire-and-forget, as Qtech\'s client expects' : 'yes'}\n` +
         (opts.failRate > 0 ? `  fail rate   ${opts.failRate}\n` : '') +
         (opts.delayMs > 0 ? `  delay       ${opts.delayMs}ms\n` : '') +
         `\nwaiting for calls…\n\n`,

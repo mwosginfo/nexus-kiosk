@@ -6,41 +6,59 @@ import type { CallEvent } from '../types.js';
 import type { AttemptResult, CallTransport } from './transport.js';
 import { FrameReader, encodeFrame } from './framing.js';
 import {
-  CallRequestSchema,
-  CallResponseSchema,
-  extractDuplicate,
-  extractErrorCode,
-  isSuccess,
-  type CallRequest,
-} from './schemas.js';
+  TcpAckSchema,
+  TcpCallMessageSchema,
+  ackErrorCode,
+  ackIsError,
+  type TcpCallMessage,
+} from './tcp-schemas.js';
 
 /**
- * TCP implementation of `CallTransport`.
+ * TCP implementation of `CallTransport`, matching the `call.bat` reference
+ * client Qtech supplied on 2026-08-20.
  *
- * Qtech confirmed (2026-08-20) that the JSON is unchanged and only the carrier
- * differs: the same request object, over TCP instead of HTTPS, to equipment on
- * the same network as the bridge. So the payload builder and the response
- * schemas are shared with the HTTP transport rather than duplicated — if the
- * message shape ever diverges, that will be a deliberate edit in one place.
+ * Their client connects, writes one newline-terminated JSON message, flushes,
+ * and closes — without reading anything. There is no acknowledgement, no error
+ * code, and no idempotency key on the wire.
+ *
+ * ── What fire-and-forget costs ─────────────────────────────────────────────
+ *
+ * Three guarantees from the 5 August integration response do not survive:
+ *
+ *   §4 retry rule      A transient fault and a business error are
+ *                      indistinguishable, because neither is reported. We can
+ *                      only see failures at the connection level.
+ *   §4 duplicates      There is no eventId, so Qtech cannot suppress a repeat.
+ *                      Our own detection cache is now the ONLY thing standing
+ *                      between a double-fire and a number announced twice.
+ *   item 7.9           "Delivered" degrades to "written to a socket that
+ *                      accepted the bytes". A call rejected on their side —
+ *                      bad token, unknown counter — is invisible to us.
+ *
+ * These are stated plainly rather than papered over, because the health
+ * reporting that tells counter staff the wall may be stale can only be as
+ * honest as the transport underneath it.
+ *
+ * ── Optimistic acknowledgement ─────────────────────────────────────────────
+ *
+ * We write exactly what their client writes, then listen for a short grace
+ * period (`qtechAckWaitMs`, default 250ms) before closing. Nothing in their
+ * protocol says a reply will come; if one does, we parse and classify it and
+ * the §4 retry rule works properly again. If none comes, the successful write
+ * is reported as an unconfirmed send.
+ *
+ * The cost is a fraction of a second per call on a link that completes in
+ * single-digit milliseconds; the benefit is that any error signalling Qtech
+ * do provide, now or later, is picked up without a code change. Set
+ * QTECH_ACK_WAIT_MS=0 to mirror their client exactly.
  *
  * ── One connection per call ────────────────────────────────────────────────
  *
- * This opens a connection, sends one call, reads the reply and closes.
- *
- * A long-lived connection would save the handshake, but on a local network
- * that is roughly a millisecond against a call volume of a few hundred a day.
- * What it would cost is the half-open failure mode: a TCP connection whose
- * peer has gone away without sending a FIN stays open indefinitely, accepts
- * writes into the kernel buffer, and reports no error — so the bridge would
- * announce into a dead socket while the wall silently stopped updating. That
- * is precisely the failure Qtech's item 9 asks us to make visible, and it is
- * far easier to avoid than to detect.
- *
- * Connecting per call makes every failure immediate and local: a refused
- * connection, a timeout or a reset surfaces on the call that caused it and
- * flows into the existing retry and health reporting. If Qtech require a
- * persistent connection, this is where that changes, and an acknowledged
- * application-level ping becomes necessary rather than optional.
+ * As their client does. This also keeps the half-open failure mode off the
+ * table: a persistent socket whose peer has gone without a FIN stays open,
+ * accepts writes, and reports no error — so the bridge would announce into a
+ * dead connection while the wall silently stopped. With fire-and-forget and no
+ * acknowledgement, that failure would be entirely undetectable.
  */
 export class QtechTcpTransport implements CallTransport {
   constructor(
@@ -48,15 +66,22 @@ export class QtechTcpTransport implements CallTransport {
     private readonly logger: Logger,
   ) {}
 
-  buildRequest(event: CallEvent): CallRequest {
-    return CallRequestSchema.parse({
-      eventId: event.eventId,
+  /**
+   * Note what is NOT sent: `eventId`. Qtech's client does not carry one and we
+   * do not add fields their parser has not been shown. It remains our internal
+   * key for the call log and for retry identity.
+   */
+  buildRequest(event: CallEvent): TcpCallMessage {
+    return TcpCallMessageSchema.parse({
+      type: 'CALL',
       ticketID: event.ticketId,
+      clientId: this.config.qtechClientId,
       branchUUID: this.config.qtechBranchUuid,
       counterName: event.counterName,
       queueNo: event.queueNo,
-      ...(event.silent ? { silent: true } : {}),
+      silent: event.silent,
       timestamp: event.timestamp,
+      authToken: this.config.qtechAuthToken,
     });
   }
 
@@ -66,7 +91,7 @@ export class QtechTcpTransport implements CallTransport {
 
     if (this.config.dryRun) {
       this.logger.info('dry-run: call suppressed', {
-        eventId: request.eventId,
+        eventId: event.eventId,
         ticketID: request.ticketID,
         queueNo: request.queueNo,
         counterName: request.counterName,
@@ -78,7 +103,8 @@ export class QtechTcpTransport implements CallTransport {
     try {
       raw = await this.exchange(JSON.stringify(request));
     } catch (err) {
-      // Connection refused, reset, timeout — all retryable per Qtech §4.
+      // Connection refused, reset, or a write that failed. Retryable per §4,
+      // and the only failure class this protocol lets us observe.
       return {
         kind: 'transient',
         httpStatus: null,
@@ -90,60 +116,57 @@ export class QtechTcpTransport implements CallTransport {
     const latencyMs = Date.now() - started;
 
     if (raw === null) {
-      // Peer closed without replying. Treated as transient: the call may or
-      // may not have been acted on, and the derived eventId makes a retry
-      // safe — Qtech suppress a repeat within their duplicate window.
-      return {
-        kind: 'transient',
-        httpStatus: null,
-        detail: 'connection closed without a response',
-        latencyMs,
-      };
+      // The expected path: written and accepted, no reply. Reported as
+      // success because that is the most the protocol allows us to know —
+      // `httpStatus: 0` marks it unconfirmed rather than acknowledged.
+      return { kind: 'success', httpStatus: 0, duplicate: false, latencyMs };
     }
+
+    // A reply arrived, which their protocol does not promise. Use it.
+    this.logger.info('qtech acknowledged a call', {
+      ticketID: request.ticketID,
+      queueNo: request.queueNo,
+      bytes: raw.length,
+    });
 
     let parsedJson: unknown;
     try {
       parsedJson = JSON.parse(raw) as unknown;
     } catch {
+      // Unreadable, but the write succeeded. Not retried: replaying a call
+      // that may have been announced would announce it twice, and with no
+      // eventId Qtech cannot suppress the repeat.
       return {
         kind: 'business-error',
         httpStatus: 0,
-        code: 'UNPARSEABLE_RESPONSE',
+        code: 'UNPARSEABLE_ACK',
         detail: raw.slice(0, 300),
         latencyMs,
       };
     }
 
-    const parsed = CallResponseSchema.safeParse(parsedJson);
-    if (!parsed.success) {
-      // Well-formed JSON that is not the agreed envelope. Not retried: the
-      // call was received, so replaying it risks a second announcement once
-      // the duplicate window closes.
+    const ack = TcpAckSchema.safeParse(parsedJson);
+    if (!ack.success) {
       return {
         kind: 'business-error',
         httpStatus: 0,
-        code: 'UNEXPECTED_RESPONSE_SHAPE',
+        code: 'UNEXPECTED_ACK_SHAPE',
         detail: raw.slice(0, 300),
         latencyMs,
       };
     }
 
-    if (isSuccess(parsed.data)) {
+    if (ackIsError(ack.data)) {
       return {
-        kind: 'success',
+        kind: 'business-error',
         httpStatus: 0,
-        duplicate: extractDuplicate(parsed.data),
+        code: ackErrorCode(ack.data),
+        detail: raw.slice(0, 300),
         latencyMs,
       };
     }
 
-    return {
-      kind: 'business-error',
-      httpStatus: 0,
-      code: extractErrorCode(parsed.data),
-      detail: raw.slice(0, 300),
-      latencyMs,
-    };
+    return { kind: 'success', httpStatus: 1, duplicate: false, latencyMs };
   }
 
   /**
@@ -175,39 +198,67 @@ export class QtechTcpTransport implements CallTransport {
     });
   }
 
-  /** Send one framed message and read one framed reply. */
+  /**
+   * Write one framed message, then wait briefly for a reply that the protocol
+   * does not promise.
+   *
+   * Resolves to the reply if one arrives inside the grace period, or to null
+   * if the write succeeded and nothing came back — which is the normal path.
+   * Rejects only when the connection or the write itself failed, which is the
+   * one failure class this protocol exposes.
+   */
   private exchange(json: string): Promise<string | null> {
-    const { qtechTcpHost: host, qtechTcpPort: port, qtechTcpFraming: framing } = this.config;
+    const {
+      qtechTcpHost: host,
+      qtechTcpPort: port,
+      qtechTcpFraming: framing,
+      qtechAckWaitMs: ackWaitMs,
+    } = this.config;
 
     return new Promise<string | null>((resolve, reject) => {
       const reader = new FrameReader(framing);
       let settled = false;
-      let socket: Socket;
+      let written = false;
+      let graceTimer: ReturnType<typeof setTimeout> | null = null;
+      const socket: Socket = connect({ host, port });
 
+      const cleanup = (): void => {
+        if (graceTimer) clearTimeout(graceTimer);
+        socket.removeAllListeners();
+        socket.destroy();
+      };
       const finish = (value: string | null): void => {
         if (settled) return;
         settled = true;
-        socket.removeAllListeners();
-        socket.destroy();
+        cleanup();
         resolve(value);
       };
       const fail = (err: Error): void => {
         if (settled) return;
         settled = true;
-        socket.removeAllListeners();
-        socket.destroy();
+        cleanup();
         reject(err);
       };
 
-      socket = connect({ host, port }, () => {
+      // Covers connect and write. Their own client allows 5s to connect.
+      socket.setTimeout(this.config.qtechTimeoutMs);
+
+      socket.once('connect', () => {
         socket.write(encodeFrame(json, framing), (err) => {
-          if (err) fail(err);
+          if (err) {
+            fail(err);
+            return;
+          }
+          written = true;
+          if (ackWaitMs <= 0) {
+            // Mirror their client exactly: write, flush, close.
+            finish(null);
+            return;
+          }
+          // Listen for an unpromised reply, then give up quietly.
+          graceTimer = setTimeout(() => finish(null), ackWaitMs);
         });
       });
-
-      // Covers connect, write and read together. Qtech recommended a 10s
-      // client timeout for the HTTP interface; the same budget applies here.
-      socket.setTimeout(this.config.qtechTimeoutMs);
 
       socket.on('data', (chunk: Buffer) => {
         try {
@@ -215,17 +266,33 @@ export class QtechTcpTransport implements CallTransport {
           const message = reader.next();
           if (message !== null) finish(message);
         } catch (err) {
-          fail(err instanceof Error ? err : new Error(String(err)));
+          // A malformed reply does not undo a successful write.
+          finish(null);
+          void err;
         }
       });
 
-      // For `raw` framing the close is the delimiter. For the others, a close
-      // with nothing complete in hand means the peer hung up mid-message.
-      socket.on('end', () => finish(reader.flush()));
-      socket.on('close', () => finish(reader.flush()));
+      // The peer closing after we have written is the expected end of a
+      // fire-and-forget exchange, not a failure. Before the write lands, it is.
+      const onClose = (): void => {
+        if (!written) {
+          fail(new Error('connection closed before the call was written'));
+          return;
+        }
+        finish(reader.flush());
+      };
+      socket.on('end', onClose);
+      socket.on('close', onClose);
 
-      socket.on('timeout', () => fail(new Error(`no response within ${this.config.qtechTimeoutMs}ms`)));
-      socket.on('error', (err) => fail(err));
+      socket.on('timeout', () => {
+        if (written) finish(null);
+        else fail(new Error(`could not reach ${host}:${port} within ${this.config.qtechTimeoutMs}ms`));
+      });
+      socket.on('error', (err) => {
+        if (written) finish(null);
+        else fail(err);
+      });
     });
   }
+
 }
