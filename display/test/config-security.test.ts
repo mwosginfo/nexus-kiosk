@@ -5,6 +5,7 @@ import { ConfigSchema } from '../src/config.js';
 const base = {
   supabaseUrl: 'https://example.supabase.co',
   supabaseKey: 'k',
+  qtechAuthToken: 'QT-MWO-testtoken',
   qtechBaseUrl: 'http://192.168.1.50:9100',
   qtechBranchUuid: 'c761bfe7',
 };
@@ -77,4 +78,33 @@ test('loopback Supabase is allowed so the tests can use a local stub', () => {
 test('a non-HTTP scheme is rejected on both legs', () => {
   assert.throws(() => ConfigSchema.parse({ ...base, qtechBaseUrl: 'ftp://qtech.local' }));
   assert.throws(() => ConfigSchema.parse({ ...base, supabaseUrl: 'ftp://example.com' }));
+});
+
+// ── The auth token ─────────────────────────────────────────────────────────
+
+test('the TCP transport refuses to start without an auth token', () => {
+  // This protocol never replies. A missing or wrong token would have Qtech
+  // rejecting every call with no error anywhere: the health row would read OK
+  // and the wall would sit blank. Startup is the only place it can be caught,
+  // so a placeholder default is worse than useless here.
+  const { qtechAuthToken: _omitted, ...noToken } = base;
+  assert.throws(
+    () => ConfigSchema.parse(noToken),
+    /QTECH_AUTH_TOKEN is required/,
+  );
+});
+
+test('an empty auth token is rejected too', () => {
+  assert.throws(() => ConfigSchema.parse({ ...base, qtechAuthToken: '' }));
+});
+
+test('the HTTP fallback does not require the TCP token', () => {
+  const { qtechAuthToken: _omitted, ...noToken } = base;
+  assert.doesNotThrow(() =>
+    ConfigSchema.parse({
+      ...noToken,
+      qtechTransport: 'http',
+      qtechBaseUrl: 'https://tenant.qtechqms.com/api/v1/ops',
+    }),
+  );
 });

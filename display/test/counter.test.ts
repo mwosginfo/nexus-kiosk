@@ -6,6 +6,7 @@ import { formatCounterName, isCounterAllowed } from '../src/domain/counter.js';
 const base = {
   supabaseUrl: 'https://example.supabase.co',
   supabaseKey: 'k',
+  qtechAuthToken: 'QT-MWO-testtoken',
   qtechBaseUrl: 'https://tenant.qtechqms.com/api/v1/ops',
   qtechUsername: 'u',
   qtechPassword: 'p',

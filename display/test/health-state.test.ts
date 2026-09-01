@@ -33,6 +33,7 @@ function harness(): { writer: HealthWriter; rows: Upserted[] } {
   const config = ConfigSchema.parse({
     supabaseUrl: 'https://example.supabase.co',
     supabaseKey: 'k',
+    qtechAuthToken: 'QT-MWO-testtoken',
     qtechBaseUrl: 'https://tenant.qtechqms.com/api/v1/ops',
     qtechUsername: 'u',
     qtechPassword: 'p',

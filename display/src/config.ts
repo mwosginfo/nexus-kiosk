@@ -73,11 +73,14 @@ export const ConfigSchema = z.object({
   qtechClientId: z.string().min(1).default('mwo-owwa'),
   /**
    * Shared secret sent as `authToken` in every message. Qtech's response said
-   * the on-premises protocol carries no authentication; their reference client
-   * shows that it does. Treated as a secret: environment file only, never in
-   * source control.
+   * the on-premises protocol carries no authentication; their `call.bat`
+   * reference client shows that it does. Treated as a secret: environment file
+   * only, never in source control.
+   *
+   * Required whenever the TCP transport is in use — see the superRefine below
+   * for why a default would be actively dangerous here.
    */
-  qtechAuthToken: z.string().min(1).default('unset'),
+  qtechAuthToken: z.string().min(1).optional(),
   /**
    * How long to listen for a reply after writing. Qtech's client reads
    * nothing, and their protocol promises nothing, but a reply costs nothing to
@@ -159,6 +162,23 @@ export const ConfigSchema = z.object({
   // The TCP link carries no TLS and no credential. Qtech's justification is
   // that it never leaves the premises, so the same rule as the URL applies:
   // plaintext is permitted to a private address and refused to a public one.
+  // A missing token must stop the bridge, not be papered over with a
+  // placeholder. This protocol never replies, so a wrong token produces no
+  // error anywhere: Qtech would reject every call, the health row would read
+  // OK, and the wall would sit blank with nothing to explain why. Failing at
+  // startup is the only place this can still be noticed.
+  if (cfg.qtechTransport === 'tcp' && !cfg.qtechAuthToken) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['qtechAuthToken'],
+      message:
+        'QTECH_AUTH_TOKEN is required for the TCP transport. Qtech supply it — ' +
+        'it is the TOKEN value in their call.bat reference client. Without it ' +
+        'every call would be rejected silently, because this protocol sends no ' +
+        'reply and there would be nothing to tell you.',
+    });
+  }
+
   if (cfg.qtechTransport === 'tcp' && !isPrivateHost(cfg.qtechTcpHost)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

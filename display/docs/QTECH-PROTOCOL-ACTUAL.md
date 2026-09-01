@@ -83,7 +83,19 @@ a failed Supabase link, and an unreachable Qtech endpoint. It cannot catch a
 call the endpoint received and rejected. That limit is the protocol's, not the
 bridge's, and it should be stated plainly to whoever relies on the badge.
 
-## The token
+## The token is required
+
+Qtech's response said the on-premises protocol carries no authentication. Their
+`call.bat` sends `authToken` in every message. Both can be true: there is no
+TLS and no HTTP Basic, but there is a bearer token in the payload.
+
+Because the protocol never replies, **we cannot tell whether their server
+validates it.** A rejected call and an announced call look identical from here.
+So the bridge refuses to start without one rather than sending a placeholder:
+a wrong token would mean every call rejected, the health row reading OK, and a
+blank wall with nothing anywhere to explain it.
+
+## Handling the token
 
 Qtech supplied it inside a batch file, in clear, to be sent in clear over the
 network. On the PE network that is their call. On our side it is treated as a

@@ -74,6 +74,7 @@ function makeConfig(baseUrl: string, over: Partial<Config> = {}): Config {
   return ConfigSchema.parse({
     supabaseUrl: 'https://example.supabase.co',
     supabaseKey: 'k',
+    qtechAuthToken: 'QT-MWO-testtoken',
     qtechBaseUrl: baseUrl,
     qtechUsername: 'mwo',
     qtechPassword: 's3cret',

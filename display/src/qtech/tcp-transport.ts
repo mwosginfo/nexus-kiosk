@@ -81,7 +81,8 @@ export class QtechTcpTransport implements CallTransport {
       queueNo: event.queueNo,
       silent: event.silent,
       timestamp: event.timestamp,
-      authToken: this.config.qtechAuthToken,
+      // Non-null by construction: config rejects a TCP setup without it.
+      authToken: this.config.qtechAuthToken ?? '',
     });
   }
 
