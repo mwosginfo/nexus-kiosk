@@ -44,8 +44,26 @@ if systemctl list-unit-files "$SERVICE" >/dev/null 2>&1; then
       "$(systemctl show -p ExecMainStatus --value "$SERVICE")" \
       "$(systemctl show -p Result --value "$SERVICE")"
   fi
+  # NRestarts is cumulative since the unit was last reset, not a live signal.
+  # Warning on the count alone cries wolf long after a problem is fixed, which
+  # is how a diagnostic stops being trusted. Weigh it against how long the
+  # current run has actually lasted.
   RESTARTS=$(systemctl show -p NRestarts --value "$SERVICE")
-  [ "${RESTARTS:-0}" -gt 3 ] && warn "restarted $RESTARTS times — likely a crash loop"
+  SINCE_US=$(systemctl show -p ActiveEnterTimestampMonotonic --value "$SERVICE")
+  NOW_US=$(awk '{printf "%.0f", $1*1000000}' /proc/uptime 2>/dev/null || echo 0)
+  if [ -n "${SINCE_US:-}" ] && [ "${SINCE_US:-0}" -gt 0 ] 2>/dev/null; then
+    UP_S=$(( (NOW_US - SINCE_US) / 1000000 ))
+  else
+    UP_S=0
+  fi
+  if [ "${RESTARTS:-0}" -gt 3 ] && [ "$UP_S" -lt 60 ]; then
+    fail "restarting now — ${RESTARTS} restarts, current run only ${UP_S}s old"
+  elif [ "${RESTARTS:-0}" -gt 3 ]; then
+    warn "${RESTARTS} restarts on the counter, but stable for ${UP_S}s — likely historical"
+    printf '      clear it with: sudo systemctl reset-failed %s\n' "$SERVICE"
+  else
+    pass "stable (${UP_S}s, ${RESTARTS:-0} restarts)"
+  fi
 else
   fail "$SERVICE is not installed"
 fi
