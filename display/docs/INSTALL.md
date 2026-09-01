@@ -331,6 +331,19 @@ sudo systemctl restart nexus-qtech-bridge
 
 ## 10. Troubleshooting
 
+**Start here.** One command checks everything the bridge needs and prints a
+report that is safe to paste into a chat — it says whether each secret is set,
+never what it is:
+
+```bash
+cd ~/nexus-kiosk/display && sudo ./scripts/diagnose.sh
+```
+
+It covers the Node version, the build, the service state and restart count,
+every required setting, whether the config actually parses, TCP reachability to
+the Qtech endpoint, Supabase reads and the health view, recent errors, disk and
+clock.
+
 | Symptom | Cause | Fix |
 |---|---|---|
 | Exits immediately, `must use https://` | `QTECH_BASE_URL` is `http://` | Correct the scheme |
