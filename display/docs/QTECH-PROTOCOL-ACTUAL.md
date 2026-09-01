@@ -16,7 +16,7 @@ in `TCP-PROTOCOL.md` for everything it covers.
 | Connection | One per call: connect, write, close |
 | Encryption | None |
 | Authentication | `authToken` field in every message |
-| Reply | **None** |
+| Reply | **None — confirmed 2026-09-01** by holding the socket open 10s after a valid call. Nothing was sent. |
 
 ## The message
 
@@ -43,6 +43,18 @@ stay inside the contract:
   that.
 - **No `eventId`** — their protocol has none, so we do not invent one. It
   remains our internal key for the call log and retry identity.
+
+## Confirmed by testing, 2026-09-01
+
+Held a connection open for ten seconds after writing a valid, correctly
+authenticated call. The endpoint sent nothing. It is not slow, and it does not
+acknowledge selectively — there is no reply channel at all.
+
+Eight payload variants were then sent, each with a distinct queue number so the
+display itself would identify any that worked: baseline matching `call.bat`,
+alternate counter, `silent` true and omitted, uppercase branch, UUID ticket id,
+UTC timestamp, and a worded counter name. This eliminates payload formatting as
+the cause of a call not appearing.
 
 ## What was confirmed, and what it costs
 
