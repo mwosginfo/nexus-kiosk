@@ -162,7 +162,9 @@ assert.deepEqual(Object.keys(delivered.body).sort(), [
   'type',
 ]);
 assert.equal(delivered.body.type, 'CALL');
-assert.equal(delivered.body.ticketID, CALLED_ROW.id, 'ticketID is the opaque kiosk_checkins id');
+// Default ticket style matches Qtech's client: T + epoch millis. Opaque
+// either way — neither form encodes anything about the person.
+assert.match(delivered.body.ticketID, /^T\d{13}$/);
 assert.equal(delivered.body.queueNo, 'A045');
 assert.equal(delivered.body.counterName, '7');
 assert.equal(delivered.body.branchUUID, 'mwo');
