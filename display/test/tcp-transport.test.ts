@@ -121,6 +121,22 @@ test('sends exactly the fields Qtech\'s own client sends', async () => {
     assert.equal(sent.queueNo, 'A045');
     assert.equal(sent.counterName, '7');
     assert.equal(sent.silent, false, 'silent is always present, not omitted');
+    // Default matches their client's shape: T + epoch millis.
+    assert.match(String(sent.ticketID), /^T\d{13}$/);
+    // And the timestamp is their offset form, not a UTC ISO string.
+    assert.match(String(sent.timestamp), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+08:00$/);
+  } finally {
+    h.server.close();
+  }
+});
+
+test('the uuid ticket style is still available', async () => {
+  // Stronger than their epoch form — collision-free and unique for the day,
+  // which their own section 6 asks for. Available once the link is proven.
+  const h = await startServer(() => { /* no reply */ });
+  try {
+    await transport(h.port, { qtechTicketIdStyle: 'uuid' }).call(event());
+    const sent = JSON.parse(h.received[0]!) as Record<string, unknown>;
     assert.equal(sent.ticketID, '11111111-1111-4111-8111-111111111111');
   } finally {
     h.server.close();
@@ -180,8 +196,9 @@ test('no personal data crosses the wire', async () => {
       assert.ok(!(forbidden in sent), `payload leaked "${forbidden}"`);
     }
 
-    // And the ticket id must be opaque — a UUID, not anything meaningful.
-    assert.match(String(sent.ticketID), /^[0-9a-f-]{36}$/);
+    // The ticket id must stay opaque under either style: a UUID or an epoch
+    // stamp. Neither encodes anything about the person.
+    assert.match(String(sent.ticketID), /^(T\d{13}|[0-9a-f-]{36})$/);
   } finally {
     h.server.close();
   }

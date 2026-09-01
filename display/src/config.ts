@@ -89,6 +89,19 @@ export const ConfigSchema = z.object({
    */
   qtechAckWaitMs: z.coerce.number().int().min(0).max(10_000).default(250),
   /**
+   * `offset` — `2026-09-01T11:55:33+08:00`, exactly as their client formats it.
+   * `iso`    — `2026-09-01T03:55:33.072Z`, the same instant at full precision.
+   * Defaults to matching their client, since a strict parser on their side
+   * would reject the other and could not tell us.
+   */
+  qtechTimestampFormat: z.enum(['offset', 'iso']).default('offset'),
+  /**
+   * `epoch` — `T1756713333072`, as their client generates it.
+   * `uuid`  — the check-in row id: opaque, collision-free, never reused.
+   * Defaults to matching their client for the same reason as above.
+   */
+  qtechTicketIdStyle: z.enum(['epoch', 'uuid']).default('epoch'),
+  /**
    * How one JSON message is delimited on the stream. Not yet specified by
    * Qtech; all plausible conventions are implemented so confirming it is a
    * configuration change rather than a code change. See qtech/framing.ts.
@@ -203,6 +216,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     qtechClientId: env.QTECH_CLIENT_ID,
     qtechAuthToken: env.QTECH_AUTH_TOKEN,
     qtechAckWaitMs: env.QTECH_ACK_WAIT_MS,
+    qtechTimestampFormat: env.QTECH_TIMESTAMP_FORMAT,
+    qtechTicketIdStyle: env.QTECH_TICKET_ID_STYLE,
     qtechTcpFraming: env.QTECH_TCP_FRAMING,
     qtechBaseUrl: env.QTECH_BASE_URL,
     qtechUsername: env.QTECH_USERNAME,

@@ -40,6 +40,8 @@ interface Options {
   /** Artificial delay before replying, in ms. */
   readonly delayMs: number;
   readonly quiet: boolean;
+  /** Print the exact bytes of every message received. */
+  readonly raw: boolean;
 }
 
 interface WallEntry {
@@ -80,6 +82,7 @@ function parseArgs(argv: readonly string[]): Options {
     failRate: Number(get('fail-rate', '0')),
     delayMs: Number(get('delay', '0')),
     quiet: argv.includes('--quiet'),
+    raw: argv.includes('--raw'),
   };
 }
 
@@ -200,6 +203,15 @@ function main(): void {
     };
 
     const process_ = (raw: string): void => {
+      if (opts.raw) {
+        process.stdout.write(`\n  ── received ${Buffer.byteLength(raw)} bytes ──\n  ${raw}\n`);
+        try {
+          const obj: unknown = JSON.parse(raw);
+          process.stdout.write(`  keys: ${Object.keys(obj as object).join(', ')}\n\n`);
+        } catch {
+          process.stdout.write('  (not valid JSON)\n\n');
+        }
+      }
       if (opts.failRate > 0 && Math.random() < opts.failRate) {
         log(opts, '  inject     dropping connection to exercise retry');
         socket.destroy();

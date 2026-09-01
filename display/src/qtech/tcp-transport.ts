@@ -5,6 +5,7 @@ import { safeError } from '../logger.js';
 import type { CallEvent } from '../types.js';
 import type { AttemptResult, CallTransport } from './transport.js';
 import { FrameReader, encodeFrame } from './framing.js';
+import { formatTicketId, formatTimestamp } from './wire-format.js';
 import {
   TcpAckSchema,
   TcpCallMessageSchema,
@@ -74,7 +75,7 @@ export class QtechTcpTransport implements CallTransport {
   buildRequest(event: CallEvent): TcpCallMessage {
     return TcpCallMessageSchema.parse({
       type: 'CALL',
-      ticketID: event.ticketId,
+      ticketID: formatTicketId(event.ticketId, this.config.qtechTicketIdStyle),
       clientId: this.config.qtechClientId,
       branchUUID: this.config.qtechBranchUuid,
       counterName: event.counterName,
