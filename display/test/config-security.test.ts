@@ -108,3 +108,30 @@ test('the HTTP fallback does not require the TCP token', () => {
     }),
   );
 });
+
+test('an unreplaced template placeholder is rejected', () => {
+  // systemd's EnvironmentFile parser is not a shell: it reads
+  // QTECH_AUTH_TOKEN=<token from Qtech> as that literal string, which is
+  // non-empty and passes a min(1) check. The bridge then starts, sends a
+  // garbage token, Qtech rejects every call silently, and the wall stays
+  // blank with the health row reading OK. This happened.
+  for (const placeholder of [
+    '<token from Qtech>',
+    '<your-token-here>',
+    'changeme',
+    'unset',
+    'QT MWO abc',      // spaces: no real token has them
+  ]) {
+    assert.throws(
+      () => ConfigSchema.parse({ ...base, qtechAuthToken: placeholder }),
+      /placeholder/i,
+      placeholder,
+    );
+  }
+});
+
+test('a real token is accepted', () => {
+  assert.doesNotThrow(() =>
+    ConfigSchema.parse({ ...base, qtechAuthToken: 'QT-MWO-3b641f1c7b7284aa32c95673d5465d7c' }),
+  );
+});

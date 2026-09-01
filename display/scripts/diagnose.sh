@@ -66,6 +66,17 @@ if [ -f "$ENV_FILE" ]; then
       fail "$key is not set"
     fi
   done
+  # A value left at its template is worse than a missing one: it looks set.
+  # systemd reads it literally, the bridge starts, and every call carries it.
+  # Name the variable and the line, never the value — one of these is a secret.
+  PLACEHOLDERS=$(grep -nE '^[A-Z_]+=.*(REPLACE_|<|>)' "$ENV_FILE" 2>/dev/null | sed 's/=.*//')
+  if [ -n "$PLACEHOLDERS" ]; then
+    fail 'settings still at their template value:'
+    printf '%s\n' "$PLACEHOLDERS" | sed 's/^\([0-9]*\):/      line \1  /'
+  else
+    pass 'no unreplaced placeholders'
+  fi
+
   [ -n "${SUPABASE_URL:-}" ] && case "$SUPABASE_URL" in
     https://*) pass 'SUPABASE_URL uses https' ;;
     *) fail 'SUPABASE_URL must be https — the bridge refuses to start otherwise' ;;

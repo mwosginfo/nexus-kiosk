@@ -32,6 +32,17 @@ const csvNumbers = z
  * a valid input to `ConfigSchema`, which makes programmatic construction (and
  * every test that builds a config) unsound.
  */
+/**
+ * Catches a setting left at its template value. Angle brackets and spaces are
+ * the giveaway — no real credential contains either, and both are exactly what
+ * the `.env.example` placeholders looked like.
+ */
+function looksLikePlaceholder(value: string): boolean {
+  if (/[<>]/.test(value)) return true;
+  if (/\s/.test(value)) return true;
+  return ['unset', 'changeme', 'todo', 'replaceme', 'xxx'].includes(value.toLowerCase());
+}
+
 const boolish = z.union([
   z.boolean(),
   z.enum(['true', 'false', '1', '0']).transform((v) => v === 'true' || v === '1'),
@@ -180,6 +191,24 @@ export const ConfigSchema = z.object({
   // error anywhere: Qtech would reject every call, the health row would read
   // OK, and the wall would sit blank with nothing to explain why. Failing at
   // startup is the only place this can still be noticed.
+  //
+  // An UNREPLACED placeholder is worse than a missing value, because it looks
+  // set. systemd's EnvironmentFile parser is not a shell: it reads
+  // `QTECH_AUTH_TOKEN=<token from Qtech>` as that literal string, which is
+  // non-empty and sails through a min(1) check. This actually happened, and
+  // cost an afternoon of debugging a bridge that was working perfectly.
+  if (cfg.qtechTransport === 'tcp' && cfg.qtechAuthToken && looksLikePlaceholder(cfg.qtechAuthToken)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['qtechAuthToken'],
+      message:
+        `QTECH_AUTH_TOKEN still looks like the template placeholder ` +
+        `(${JSON.stringify(cfg.qtechAuthToken)}). Replace it with the real ` +
+        `token from Qtech — it is the TOKEN value in their call.bat. Left as ` +
+        `it is, every call would be rejected silently.`,
+    });
+  }
+
   if (cfg.qtechTransport === 'tcp' && !cfg.qtechAuthToken) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
