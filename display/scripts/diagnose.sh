@@ -24,8 +24,8 @@ printf 'host %s   %s\n' "$(hostname)" "$(date -Is)"
 head_ '1. Runtime'
 if command -v node >/dev/null 2>&1; then
   NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
-  if [ "$NODE_MAJOR" -ge 20 ]; then pass "node $(node -v)"
-  else fail "node $(node -v) — needs 20 or newer"; fi
+  if [ "$NODE_MAJOR" -ge 22 ]; then pass "node $(node -v)"
+  else fail "node $(node -v) — needs 22 or newer (supabase-js needs a native WebSocket; on older Node the bridge crash-loops with 'native WebSocket not found')"; fi
 else
   fail 'node is not installed'
 fi

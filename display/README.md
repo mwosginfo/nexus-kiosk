@@ -232,7 +232,7 @@ names, emails, or ref codes.
 ```bash
 npm install
 npm run typecheck
-npm test          # 80 tests, no network or Supabase needed
+npm test          # 82 tests, no network or Supabase needed
 npm run build
 ```
 
@@ -252,6 +252,13 @@ The delivery tests run against a real local HTTP server standing in for Qtech,
 and assert the behaviours their §4 makes mandatory: retry only on transient
 faults, never on business errors, one idempotency key across the retries of a
 single call, per-counter ordering, and a closed set of payload keys.
+
+## Requirements
+
+**Node 22 or newer.** Set by `@supabase/supabase-js`, which needs a native
+`WebSocket` for Realtime — Node ships one only from 22. On Node 20 the bridge
+installs cleanly and then crash-loops at startup with `native WebSocket not
+found`. The installer refuses to proceed below 22.
 
 ## Network requirements
 

@@ -18,16 +18,28 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # ── Node ────────────────────────────────────────────────────────────────────
-if ! command -v node >/dev/null 2>&1; then
-  echo "Node.js is not installed. Install Node 20 LTS or newer, then re-run:" >&2
-  echo "  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -" >&2
+# Node 22 is a hard floor, set by @supabase/supabase-js rather than by us: it
+# needs a native WebSocket for Realtime, which Node only ships from 22. On an
+# older Node the bridge builds and installs fine and then crash-loops at
+# startup with "native WebSocket not found", which is a slow way to discover
+# a version requirement. Check it here instead.
+node_install_hint() {
+  echo "  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -" >&2
   echo "  sudo apt-get install -y nodejs" >&2
+}
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "Node.js is not installed. Install Node 22 LTS or newer, then re-run:" >&2
+  node_install_hint
   exit 1
 fi
 
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-if (( NODE_MAJOR < 20 )); then
-  echo "Node ${NODE_MAJOR} found; this bridge needs Node 20 or newer." >&2
+if (( NODE_MAJOR < 22 )); then
+  echo "Node $(node -v) found; this bridge needs Node 22 or newer." >&2
+  echo "@supabase/supabase-js requires a native WebSocket, added in Node 22." >&2
+  echo "Upgrade with:" >&2
+  node_install_hint
   exit 1
 fi
 

@@ -36,6 +36,7 @@ No credentials: the TCP protocol carries no authentication. See
 
 - Raspberry Pi 3 or newer. **Pi OS Lite is enough** — the bridge is headless,
   with no display, browser, or desktop.
+- **Node 22 or newer** (see §2 — this is a hard requirement).
 - Wired ethernet preferred.
 - Outbound HTTPS (443) to the Qtech tenant **and** to your Supabase project.
 - No inbound ports. The interface is one-way; the bridge listens on nothing.
@@ -79,13 +80,18 @@ sudo timedatectl set-timezone Asia/Singapore
 timedatectl                       # check "System clock synchronized: yes"
 ```
 
-Install Node 20 LTS or newer — Raspberry Pi OS ships something older:
+Install Node 22 LTS or newer — Raspberry Pi OS ships something older:
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs
-node -v                           # must be v20.x or newer
+node -v                           # must be v22.x or newer
 ```
+
+**22 is a hard floor, not a preference.** `@supabase/supabase-js` needs a
+native `WebSocket` for Realtime, and Node only ships one from 22. On Node 20
+everything installs cleanly and then the service crash-loops at startup with
+`native WebSocket not found`.
 
 ---
 
@@ -349,6 +355,7 @@ clock.
 | Exits immediately, `must use https://` | `QTECH_BASE_URL` is `http://` | Correct the scheme |
 | Exits immediately, `NODE_TLS_REJECT_UNAUTHORIZED=0` | Certificate validation disabled | Unset it — Qtech item 7.1 requires validation |
 | Exits immediately, ZodError | A required variable is missing or malformed | The error names the field |
+| `native WebSocket not found`, restarting every 5s | Node is older than 22 | Upgrade Node (§2), then re-run `install.sh` |
 | `realtime channel state` warnings, never `subscribed` | Realtime blocked or the key lacks access | Check the firewall allows WSS to Supabase; confirm the key |
 | `state = DEGRADED`, `last_error_code = AUTH_FAILED` | Wrong username or secret, or rotated | Re-enter the credentials, restart |
 | `state = DEGRADED`, `COUNTER_UNKNOWN` | A counter name is not on Qtech's list | Reconcile `QTECH_ALLOWED_COUNTERS` with the agreed list; notify Qtech before adding |
