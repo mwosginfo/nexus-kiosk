@@ -44,6 +44,20 @@ stay inside the contract:
 - **No `eventId`** — their protocol has none, so we do not invent one. It
   remains our internal key for the call log and retry identity.
 
+## Status, 2026-09-01: blocked on Qtech
+
+**Qtech's own `call.bat`, unmodified, run from a separate Windows machine on
+the PE network, does not display anything either.**
+
+That single result supersedes everything below it. No client puts a number on
+that wall — not ours, not theirs. The bridge is not implicated, and no further
+change to our payload can help. The endpoint accepts connections and bytes but
+nothing reaches the display, which is a provisioning or binding problem on
+their equipment.
+
+The bridge is left running. It is correct, and it will start working the moment
+their side does, with no change from us.
+
 ## Confirmed by testing, 2026-09-01
 
 Held a connection open for ten seconds after writing a valid, correctly
